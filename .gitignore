@@ -1,0 +1,412 @@
+# ============================================
+# Environment & Configuration
+# ============================================
+**/.env
+**/.env.*
+**/.env.local
+**/.env.development
+**/.env.test
+**/.env.production
+**/.env.staging
+**/.env.dev
+
+!**/.env.example
+!**/.env.sample
+!**/.env.template
+!**/.env.dist
+
+**/config/secrets.yml
+**/config/credentials/*
+**/secrets/
+**/credentials/
+**/.secret*
+**/*.secret
+
+# Terraform
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/.terraform.lock.hcl
+
+# ============================================
+# Python
+# ============================================
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
+**/*.so
+**/build/
+**/develop-eggs/
+**/dist/
+**/downloads/
+**/eggs/
+**/.eggs/
+**/lib/
+**/lib64/
+**/parts/
+**/sdist/
+**/var/
+**/wheels/
+**/*.egg-info/
+**/.installed.cfg
+**/*.egg
+**/MANIFEST
+**/pip-wheel-metadata/
+**/share/python-wheels/
+**/*.manifest
+**/*.spec
+
+# PyInstaller
+**/*.exe
+**/*.bin
+**/*.spec
+
+# Unit test / coverage reports
+**/htmlcov/
+**/.tox/
+**/.nox/
+**/.coverage
+**/.coverage.*
+**/.cache
+**/nosetests.xml
+**/coverage.xml
+**/*.cover
+**/.hypothesis/
+**/.pytest_cache/
+**/.pytest_coverage/
+
+# Jupyter Notebook
+**/.ipynb_checkpoints
+
+# IPython
+**/profile_default/
+**/ipython_config.py
+
+# mypy
+**/.mypy_cache/
+**/.dmypy.json
+**/dmypy.json
+
+# Pyre type checker
+**/.pyre/
+
+# ============================================
+# IDE & Editors
+# ============================================
+**/.vscode/
+**/.vscode/*
+!**/.vscode/settings.json
+!**/.vscode/tasks.json
+!**/.vscode/launch.json
+!**/.vscode/extensions.json
+**/.idea/
+**/*.iml
+**/*.iws
+**/*.ipr
+**/.vs/
+**/.vs/*
+**/_ReSharper*/
+**/*.[Rr]e[Ss]harper
+**/*.swp
+**/*.swo
+**/*~
+**/.DS_Store
+**/._*
+**/Thumbs.db
+**/*.sublime-*
+**/*.code-workspace
+
+# Visual Studio Code
+**/.history/
+
+# JetBrains IDEs
+**/out/
+**/target/
+
+# Eclipse
+**/.settings/
+**/.classpath
+**/.project
+**/.metadata
+**/bin/
+**/tmp/
+
+# ============================================
+# Docker & Containerization
+# ============================================
+**/.dockerignore
+**/docker-compose.override.yml
+**/docker-compose.*.yml
+**/docker-data/
+**/.docker/
+**/*.dockerfile.swp
+
+# ============================================
+# Logs & Databases
+# ============================================
+**/*.log
+**/logs/
+**/*.logs
+**/log/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/lerna-debug.log*
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.dump
+**/*.journal
+
+# ============================================
+# OS & Temporary Files
+# ============================================
+**/.DS_Store
+**/.DS_Store?
+**/._*
+**/.Spotlight-V100
+**/.Trashes
+**/ehthumbs.db
+**/[Tt]humbs.db
+**/Desktop.ini
+**/*.bak
+**/*.tmp
+**/*.temp
+**/*.orig
+**/*.dump
+**/.cache/
+**/.tmp/
+**/temp/
+**/tmp/
+
+# ============================================
+# Testing & QA
+# ============================================
+**/.robot/
+**/*.robot
+**/test-results/
+**/test-reports/
+**/coverage/
+**/junit/
+**/test-output/
+**/.pytest_cache/
+**/.coverage.*
+
+# ============================================
+# Package Managers
+# ============================================
+**/node_modules/
+**/npm-debug.log*
+**/yarn-error.log*
+**/.yarn/
+**/.yarnrc
+**/package-lock.json
+**/yarn.lock
+**/pnpm-lock.yaml
+**/.bundle/
+**/vendor/
+**/Gemfile.lock
+**/go.sum
+**/go.mod
+**/composer.lock
+**/Pipfile.lock
+**/poetry.lock
+
+# ============================================
+# Documentation
+# ============================================
+**/_site/
+**/.sass-cache/
+**/.jekyll-cache/
+**/.jekyll-metadata
+**/_build/
+**/site/
+**/.docs/
+
+# ============================================
+# CI/CD & Deployment
+# ============================================
+**/.circleci/
+**/.travis.yml
+**/.gitlab-ci.yml
+**/.github/
+**/.gitlab/
+**/.azure-pipelines/
+**/bitbucket-pipelines.yml
+**/.build/
+**/.dist/
+**/.deploy/
+**/deployments/
+**/.ci/
+
+# ============================================
+# Security
+# ============================================
+**/*.pem
+**/*.key
+**/*.crt
+**/*.csr
+**/*.p12
+**/*.pfx
+**/*.der
+**/*.pub
+**/id_rsa
+**/id_dsa
+**/*.gpg
+**/*.asc
+**/*.secret
+**/secrets.yml
+**/credentials.yml.enc
+**/*.private
+**/private.key
+
+# ============================================
+# Project Specific 
+# ============================================
+services/gitlab_api_service/.env
+
+# ============================================
+# Media & Uploads
+# ============================================
+**/uploads/
+**/media/
+**/staticfiles/
+**/*.mp4
+**/*.mov
+**/*.avi
+**/*.mp3
+**/*.wav
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.bmp
+**/*.ico
+
+# ============================================
+# Backup files
+# ============================================
+**/*.backup
+**/*.old
+**/*.save
+**/*.back
+**/*.bkp
+**/*.savepoint
+
+# ============================================
+# Development Tools
+# ============================================
+**/.vagrant/
+**/Vagrantfile
+**/*.vagrant
+**/.kitchen/
+**/Berksfile.lock
+**/.chef/
+
+# ============================================
+# Virtual Environments
+# ============================================
+**/venv/
+**/.venv/
+**/env/
+**/.env/
+**/ENV/
+**/virtualenv/
+**/.virtualenv/
+**/pythonenv/
+**/.python-version
+
+# ============================================
+# Project Build Outputs
+# ============================================
+**/out/
+**/target/
+**/bin/
+**/obj/
+**/build/
+**/dist/
+**/*.jar
+**/*.war
+**/*.ear
+**/*.zip
+**/*.tar.gz
+**/*.tgz
+
+# ============================================
+# IDE Project Files
+# ============================================
+**/.projections.json
+**/.vimrc.local
+**/.vimlocal
+**/.editorconfig.save
+**/.vscode/settings.json.save
+
+# ============================================
+# Temporary IDE Files
+# ============================================
+**/*.komodoproject
+**/*.komodoproject.*
+**/.komodotools/
+**/.kdev4/
+**/*.kdev4
+
+# ============================================
+# Development Database Files
+# ============================================
+**/*.sqlite3-journal
+**/*.sqlite3-*
+**/db.sqlite3
+**/db.sqlite3-*
+
+# ============================================
+# macOS Extended Attributes
+# ============================================
+**/.AppleDouble
+**/.LSOverride
+**/.DocumentRevisions-V100
+**/.fseventsd
+**/.Spotlight-V100
+**/.TemporaryItems
+**/.Trashes
+**/.VolumeIcon.icns
+**/.com.apple.timemachine.donotpresent
+**/.AppleDB
+**/.AppleDesktop
+**/Network Trash Folder
+**/Temporary Items
+**/.apdisk
+
+# ============================================
+# Windows
+# ============================================
+**/[Dd]esktop.ini
+**/$RECYCLE.BIN/
+**/Thumbs.db
+**/ehthumbs.db
+**/Desktop.ini
+**/*.lnk
+**/~$*
+
+# ============================================
+# Linux
+# ============================================
+**/.directory
+**/.Trash-*/
+**/.nfs*
+
+# ============================================
+# Development Cache Directories
+# ============================================
+**/.parcel-cache/
+**/.next/
+**/.nuxt/
+**/.svelte-kit/
+**/.astro/
+**/.cache/
+**/.eslintcache
+**/.stylelintcache
+**/.babel-cache/
+**/.grunt/
+**/.grunt_build/
+**/.gradle/
+**/.m2/
