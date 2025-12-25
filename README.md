@@ -19,14 +19,14 @@ A Telegram bot that provides analytics and information about GitLab users and pr
 The bot requires the following environment variables:
 - `GITLAB_URL`: Your GitLab instance URL
 - `GITLAB_TOKEN`: Personal Access Token with appropriate permissions
-- `TELEGRAM_BOT_TOKEN`: Your Telegram bot token
+- `BOT_TOKEN`: Your Telegram bot token
 
 ## Running the Bot
 
 You can run the bot using Docker Compose:
 
 ```
-docker-compose up
+docker compose up
 ```
 
 ## License

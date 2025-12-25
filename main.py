@@ -8,7 +8,6 @@ from aiogram.dispatcher.middlewares.base import BaseMiddleware
 from config import load_config
 from handlers import router
 from services.gitlab_api_service.service import GitLabApiService
-from services.gitlab_api_service.config import load_gitlab_config
 
 
 class GitLabServiceMiddleware(BaseMiddleware):
@@ -27,19 +26,7 @@ async def main():
     config = load_config()
     
     # Initialize GitLab API service
-    # Try to load GitLab config from service's env file first
-    gitlab_config = None
-    service_env_path = os.path.join("services", "gitlab_api_service", ".env")
-    if os.path.exists(service_env_path):
-        try:
-            gitlab_config = load_gitlab_config(service_env_path)
-            print(f"✅ GitLab config loaded from {service_env_path}")
-        except Exception as e:
-            print(f"⚠️  Failed to load GitLab config from {service_env_path}: {e}")
-    
-    # If that fails, use the main config
-    if not gitlab_config or not gitlab_config.url or not gitlab_config.token:
-        gitlab_config = config.gitlab
+    gitlab_config = config.gitlab
     
     if gitlab_config.url and gitlab_config.token:
         gitlab_service = GitLabApiService(gitlab_config.url, gitlab_config.token)

@@ -5,7 +5,6 @@ from environs import Env
 @dataclass
 class BotConfig:
     token: str
-    admin_ids: list[int]
 
 
 @dataclass
@@ -26,8 +25,7 @@ def load_config() -> Config:
     
     return Config(
         bot=BotConfig(
-            token=env.str("BOT_TOKEN"),
-            admin_ids=list(map(int, env.list("ADMIN_IDS")))
+            token=env.str("BOT_TOKEN")
         ),
         gitlab=GitLabConfig(
             url=env.str("GITLAB_URL", ""),
