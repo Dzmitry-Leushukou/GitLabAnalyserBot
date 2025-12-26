@@ -26,7 +26,7 @@ def get_workers_menu(page=1):
         next_button = KeyboardButton("Next")
         controls_row.append(next_button)
     
-    back_button = KeyboardButton("Back")
+    back_button = KeyboardButton("Main Menu")
     controls_row.append(back_button)
     buttons.append(controls_row)
     

@@ -50,7 +50,7 @@ class Handler:
                 if 'page' not in context.user_data:
                     context.user_data['page'] = 1
                 await self.workers_message(update, context)
-            case "Back":
+            case "Main Menu":
                 await self.back_to_main_menu_message(update, context)
             case "Next":
                 if 'page' not in context.user_data:
