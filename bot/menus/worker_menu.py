@@ -1,12 +1,12 @@
 from telegram import ReplyKeyboardMarkup, KeyboardButton
 from services.GitLabService import GitLabService
 
-def get_workers_menu(page=1):
+def get_worker_menu(page=1):
     gitlab_service = GitLabService()
-    users = gitlab_service.get_users(page)
+    users = gitlab_service.get_user(page)
     
     if not users:
-        back_button = KeyboardButton("Main menu")
+        back_button = KeyboardButton("Back")
         buttons = [[back_button]]
         return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     

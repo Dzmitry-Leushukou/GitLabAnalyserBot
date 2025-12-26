@@ -12,6 +12,7 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 - **Telegram Interface**: Simple chat-based interface for interacting with GitLab data
 - **Pagination**: Navigate through users with Next/Previous controls
 - **Responsive Menus**: Interactive keyboard menus for easy navigation
+- **User Details**: Click on any user to view detailed information including name, username, and avatar
 - **Configuration**: Environment-based configuration for easy setup
 
 ## Prerequisites
@@ -80,14 +81,19 @@ python bot/main.py
 The bot provides a menu-based interface:
 
 1. **Start Menu**: Initial menu with a "Start" button
-2. **Main Menu**: Access to "Workers" (users) section
+2. **Main menu**: Access to "Workers" (users) section
 3. **Workers Menu**: Paginated list of GitLab users with navigation controls
+
+### User Interaction
+The bot allows users to interact with GitLab user data:
+- **User Selection**: Tap on any user name to view detailed information
+- **User Details**: Displays name, username, and avatar URL for selected users
 
 ### Navigation Controls
 
 - **Next**: Go to the next page of users
 - **Previous**: Go to the previous page of users
-- **Back**: Return to the main menu
+- **Back**: Return to the Main menu
 
 ## Project Structure
 

@@ -1,6 +1,7 @@
 from bot.config import Config
 from bot.menus.main_menu import get_main_menu
 from bot.menus.workers_menu import get_workers_menu
+from bot.menus.worker_menu import get_worker_menu
 from bot.menus.start_menu import get_start_menu
 import logging
 
@@ -23,6 +24,7 @@ class Handler:
         if not self._initialized:
             self.config = Config()
             self._initialized = True
+            self.current_users = {}  # Store current users for each user session
     
     async def error_handler(update, context):
         logger = logging.getLogger(__name__)
@@ -50,7 +52,7 @@ class Handler:
                 if 'page' not in context.user_data:
                     context.user_data['page'] = 1
                 await self.workers_message(update, context)
-            case "Main Menu":
+            case "Main menu":
                 await self.back_to_main_menu_message(update, context)
             case "Next":
                 if 'page' not in context.user_data:
@@ -62,6 +64,12 @@ class Handler:
                     context.user_data['page'] = 1
                 context.user_data['page'] = max(1, context.user_data['page'] - 1)
                 await self.workers_message(update, context)
+            case "Worker":
+                await self.worker_message(update, context)
+            case username if username in context.user_data.get('user_mapping', {}):
+                # Handle user selection - call get_user with the selected user ID
+                user_id = context.user_data['user_mapping'][username]
+                await self.select_user(update, context, user_id)
             case _:
                 await update.message.reply_text(
                     text="Invalid option"
@@ -75,14 +83,53 @@ class Handler:
         
         page = context.user_data['page']
         
+        # Store the current users for this session
+        from services.GitLabService import GitLabService
+        gitlab_service = GitLabService()
+        users = gitlab_service.get_users(page)
+        
+        # Create a mapping of user names to user IDs for this session
+        user_mapping = {}
+        for user in users:
+            name = user.get('name', user.get('username', 'Unknown'))
+            user_mapping[name] = user['id']
+        
+        # Store the user mapping in context
+        context.user_data['user_mapping'] = user_mapping
+        
         await update.message.reply_text(
             text="Select a user:",
             reply_markup=get_workers_menu(page)
         )
     
     async def back_to_main_menu_message(self, update, context):
-        logger.info("Back to main menu message")
+        logger.info("Back to Main menu message")
         await update.message.reply_text(
             text="Choose option:",
+            reply_markup=get_main_menu()
+        )
+
+    async def worker_message(self, update, context):
+        logger.info("Worker message")
+        await update.message.reply_text(
+            text="Select a user:",
+            reply_markup=get_worker_menu()
+        )
+
+    async def select_user(self, update, context, user_id):
+        logger.info(f"Selected user with ID: {user_id}")
+        from services.GitLabService import GitLabService
+        gitlab_service = GitLabService()
+        user_data = gitlab_service.get_user(user_id)
+        
+        # Format and send user information
+        user_info = f"User Info:\n"
+        user_info += f"Name: {user_data.get('name', 'N/A')}\n"
+        user_info += f"Username: {user_data.get('username', 'N/A')}\n"
+        if user_data.get('avatar_url'):
+            user_info += f"Avatar URL: {user_data.get('avatar_url', 'N/A')}\n"
+        
+        await update.message.reply_text(
+            text=user_info,
             reply_markup=get_main_menu()
         )
