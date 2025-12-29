@@ -1,8 +1,10 @@
 from services.config import Config
 import logging
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
+import re
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +25,8 @@ class GitLabService:
             self.config = Config()
             self._initialized = True
     
-    def get_users(self, page:int):
+    def get_users(self, page: int) -> List[Dict]:
+        """Get users list with pagination."""
         params = {
             'page': page,
             'per_page': self.config.page_size,
@@ -36,35 +39,234 @@ class GitLabService:
         )
         return response.json()
 
-    def get_user(self, user_id:int):
+    def get_user(self, user_id: int) -> Dict:
+        """Get user details by ID."""
         response = requests.get(
             self.config.gitlab_url + '/api/v4/users/' + str(user_id),
             headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
         )
         return response.json()
 
-    def get_user_tasks(self, user_id):
+    def get_user_tasks(self, user_id: int) -> List[Dict]:
         """
-        Gets all tasks where the user was an assignee.
+        Gets all tasks where the user was an assignee at any time.
+        Uses optimized search in recent projects.
         """
-        projects = self.get_all_repos()
-        all_tasks = []
-        for project in projects:
-            # Find tasks where the user was an assignee
+        # Get user info first
+        user_info = self.get_user(user_id)
+        if not user_info:
+            logger.error(f"User {user_id} not found")
+            return []
+        
+        username = user_info.get('username')
+        logger.info(f"Searching for tasks where user {username} was assignee...")
+        
+        # Get current tasks where user is assignee
+        current_tasks = self._get_current_assignee_tasks(user_id)
+        logger.info(f"Found {len(current_tasks)} current tasks")
+        
+        # Get user's recent projects
+        recent_projects = self._get_user_recent_projects(user_id, limit=30)
+        logger.info(f"Will search in {len(recent_projects)} recent projects")
+        
+        # Search for historical assignments in recent projects
+        historical_tasks = []
+        processed_projects = 0
+        
+        for project_id in recent_projects:
+            try:
+                project_tasks = self._search_assignee_in_project(project_id, user_id, username)
+                if project_tasks:
+                    historical_tasks.extend(project_tasks)
+                    logger.info(f"Project {project_id}: found {len(project_tasks)} historical tasks")
+                    
+            except Exception as e:
+                logger.error(f"Error searching project {project_id}: {e}")
+                continue
+            
+            processed_projects += 1
+            
+            # Progress update
+            if processed_projects % 5 == 0:
+                logger.info(f"Processed {processed_projects}/{len(recent_projects)} projects")
+        
+        # Combine and deduplicate
+        all_tasks = current_tasks + historical_tasks
+        unique_tasks = self._deduplicate_tasks(all_tasks)
+        
+        logger.info(f"Total unique tasks found: {len(unique_tasks)}")
+        return unique_tasks
+    
+    def _get_current_assignee_tasks(self, user_id: int) -> List[Dict]:
+        """Get tasks where user is currently assignee."""
+        tasks = []
+        page = 1
+        
+        while True:
+            try:
+                response = requests.get(
+                    f"{self.config.gitlab_url}/api/v4/issues",
+                    params={
+                        'assignee_id': user_id,
+                        'state': 'all',
+                        'page': page,
+                        'per_page': 100,
+                        'scope': 'all'
+                    },
+                    headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+                )
+                response.raise_for_status()
+                
+                page_tasks = response.json()
+                if not page_tasks:
+                    break
+                
+                tasks.extend(page_tasks)
+                page += 1
+                
+                # Safety limit
+                if page > 10:
+                    break
+                    
+            except Exception as e:
+                logger.error(f"Error getting current tasks page {page}: {e}")
+                break
+        
+        return tasks
+    
+    def _get_user_recent_projects(self, user_id: int, limit: int = 30) -> List[int]:
+        """Get projects where user recently participated."""
+        try:
+            # Try to get user events first
             response = requests.get(
-                f"{self.config.gitlab_url}/api/v4/projects/{project}/issues",
-                params={
-                    'assignee_id': user_id,
-                    'state': 'all'  # Get all tasks (open and closed)
-                },
+                f"{self.config.gitlab_url}/api/v4/users/{user_id}/events",
+                params={'per_page': 50, 'page': 1},
                 headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
             )
-            response.raise_for_status()
-            tasks = response.json()
-            all_tasks.extend(tasks)
-        return all_tasks
-
-    def get_label_history(self, project_id, issue_iid):
+            
+            if response.status_code == 200:
+                events = response.json()
+                project_ids = set()
+                
+                for event in events:
+                    project_id = event.get('project_id')
+                    if project_id:
+                        project_ids.add(project_id)
+                    
+                    if len(project_ids) >= limit:
+                        break
+                
+                if project_ids:
+                    return list(project_ids)
+                    
+        except Exception as e:
+            logger.warning(f"Could not get user events: {e}")
+        
+        # Fallback: get some accessible projects
+        all_projects = self.get_all_repos()
+        return all_projects[:limit]
+    
+    def _search_assignee_in_project(self, project_id: int, user_id: int, username: str) -> List[Dict]:
+        """Search for tasks in a project where user was assignee."""
+        try:
+            # Get project tasks
+            page = 1
+            found_tasks = []
+            
+            while True:
+                response = requests.get(
+                    f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues",
+                    params={
+                        'page': page,
+                        'per_page': 50,
+                        'state': 'all',
+                        'scope': 'all'
+                    },
+                    headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+                )
+                
+                if response.status_code != 200:
+                    break
+                
+                tasks = response.json()
+                if not tasks:
+                    break
+                
+                # Check each task for assignee history
+                for task in tasks:
+                    # Check current assignee
+                    assignee = task.get('assignee')
+                    if assignee and assignee.get('id') == user_id:
+                        found_tasks.append(task)
+                        continue
+                    
+                    # Check if user mentioned in description
+                    description = task.get('description', '').lower()
+                    if f'@{username}'.lower() in description:
+                        found_tasks.append(task)
+                        continue
+                    
+                    # Check system notes for assignee history
+                    task_iid = task.get('iid')
+                    if self._check_assignee_in_notes(project_id, task_iid, username):
+                        found_tasks.append(task)
+                
+                page += 1
+                if page > 3:  # Limit search depth
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error searching project {project_id}: {e}")
+        
+        return found_tasks
+    
+    def _check_assignee_in_notes(self, project_id: int, issue_iid: int, username: str) -> bool:
+        """Check if user was mentioned as assignee in system notes."""
+        try:
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
+                params={'per_page': 20, 'page': 1},
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            
+            if response.status_code != 200:
+                return False
+            
+            notes = response.json()
+            for note in notes:
+                if note.get('system'):
+                    body = note.get('body', '').lower()
+                    # Check for assignee patterns
+                    patterns = [
+                        f'assigned to @{username}',
+                        f'reassigned to @{username}',
+                        f'unassigned @{username}',
+                        f'assigned to {username}',
+                    ]
+                    
+                    for pattern in patterns:
+                        if pattern.lower() in body:
+                            return True
+                            
+        except Exception:
+            pass
+        
+        return False
+    
+    def _deduplicate_tasks(self, tasks: List[Dict]) -> List[Dict]:
+        """Remove duplicate tasks."""
+        seen = set()
+        unique_tasks = []
+        
+        for task in tasks:
+            key = (task.get('project_id'), task.get('iid'))
+            if key not in seen:
+                seen.add(key)
+                unique_tasks.append(task)
+        
+        return unique_tasks
+    
+    def get_label_history(self, project_id: int, issue_iid: int) -> List[Dict]:
         """
         Gets the label change history for a specific task.
         Returns list of events sorted by timestamp.
@@ -77,13 +279,8 @@ class GitLabService:
             response.raise_for_status()
             label_events = response.json()
             
-            # Process and format events
-            events_by_date = []
+            events = []
             for event in label_events:
-                # Convert event time
-                created_at = event.get('created_at')
-                
-                # Determine action type
                 action = event.get('action')
                 if action == "add":
                     action_text = "added"
@@ -92,44 +289,40 @@ class GitLabService:
                 else:
                     action_text = action
                 
-                # Get user information
                 user_name = "Unknown user"
                 if event.get('user'):
                     user_name = event['user'].get('name', 'Unknown user')
                 
                 event_info = {
-                    'timestamp': created_at,
+                    'timestamp': event.get('created_at'),
                     'label': event.get('label', {}).get('name', 'Unknown label'),
                     'action': action_text,
                     'user': user_name,
                     'raw_action': action,
                     'type': 'label'
                 }
-                events_by_date.append(event_info)
+                events.append(event_info)
             
-            return events_by_date
+            return events
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting label history: {e}")
             return []
     
-    def get_assignee_history(self, project_id, issue_iid):
+    def get_assignee_history(self, project_id: int, issue_iid: int) -> List[Dict]:
         """
         Gets the assignee change history from system notes.
         Returns list of assignee events sorted by timestamp.
         """
         try:
-            # First get all notes for the issue
+            # Get all notes for the issue
             page = 1
             all_notes = []
             
             while True:
                 response = requests.get(
                     f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
-                    params={
-                        'page': page,
-                        'per_page': 100
-                    },
+                    params={'page': page, 'per_page': 100},
                     headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
                 )
                 response.raise_for_status()
@@ -145,12 +338,10 @@ class GitLabService:
             assignee_events = []
             
             for note in all_notes:
-                # Check if it's a system note about assignee
                 if note.get('system') and self._is_assignee_note(note.get('body', '')):
                     body = note.get('body', '')
                     created_at = note.get('created_at')
                     
-                    # Parse assignee change information
                     event_type, assignee_info = self._parse_assignee_note(body)
                     
                     assignee_events.append({
@@ -169,53 +360,39 @@ class GitLabService:
             return []
     
     def _is_assignee_note(self, note_body: str) -> bool:
-        """
-        Check if a system note is about assignee changes.
-        """
+        """Check if a system note is about assignee changes."""
         note_lower = note_body.lower()
-        assignee_keywords = [
-            'assigned', 'unassigned', 'reassigned',
-            'назначил', 'назначение', 'назначен'
-        ]
-        
+        assignee_keywords = ['assigned', 'unassigned', 'reassigned']
         return any(keyword in note_lower for keyword in assignee_keywords)
     
-    def _parse_assignee_note(self, note_body: str) -> tuple:
-        """
-        Parse assignee note to extract event type and assignee info.
-        Returns (event_type, assignee_info)
-        """
+    def _parse_assignee_note(self, note_body: str) -> Tuple[str, Optional[str]]:
+        """Parse assignee note to extract event type and assignee info."""
         note_lower = note_body.lower()
         
-        if 'unassigned' in note_lower or 'убрал назначение' in note_lower:
+        if 'unassigned' in note_lower:
             return 'unassigned', None
         elif 'reassigned' in note_lower:
             return 'reassigned', self._extract_username_from_note(note_body)
-        elif 'assigned' in note_lower or 'назначил' in note_lower:
+        elif 'assigned' in note_lower:
             return 'assigned', self._extract_username_from_note(note_body)
         
         return 'unknown', None
     
     def _extract_username_from_note(self, note_body: str) -> Optional[str]:
-        """
-        Extract username from note body.
-        Looks for @username patterns or mentions.
-        """
-        import re
-        
+        """Extract username from note body."""
         # Try to find @username pattern
         username_match = re.search(r'@([\w\.\-]+)', note_body)
         if username_match:
             return username_match.group(1)
         
         # Try to find "to User Name" pattern
-        assigned_match = re.search(r'(?:to|на)\s+([^@\n]+)', note_body, re.IGNORECASE)
+        assigned_match = re.search(r'to\s+([^@\n]+)', note_body, re.IGNORECASE)
         if assigned_match:
             return assigned_match.group(1).strip()
         
         return None
     
-    def get_combined_history(self, project_id, issue_iid):
+    def get_combined_history(self, project_id: int, issue_iid: int) -> Dict:
         """
         Gets combined history of labels and assignee changes.
         Returns sorted list of all events.
@@ -231,12 +408,10 @@ class GitLabService:
             # Convert timestamp strings to datetime for proper sorting
             for event in all_events:
                 try:
-                    # Convert ISO format string to datetime
                     event['timestamp_dt'] = datetime.fromisoformat(
                         event['timestamp'].replace('Z', '+00:00')
                     )
                 except (ValueError, AttributeError):
-                    # If conversion fails, use a far future date for sorting
                     event['timestamp_dt'] = datetime.max
             
             # Sort by timestamp
@@ -268,10 +443,8 @@ class GitLabService:
                 'history': []
             }
     
-    def _get_issue_info(self, project_id, issue_iid):
-        """
-        Get basic issue information.
-        """
+    def _get_issue_info(self, project_id: int, issue_iid: int) -> Optional[Dict]:
+        """Get basic issue information."""
         try:
             response = requests.get(
                 f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}",
@@ -294,34 +467,7 @@ class GitLabService:
             logger.error(f"Error getting issue info: {e}")
             return None
     
-    def get_issue_events(self, project_id, issue_iid):
-        """
-        Alternative method: Get issue events (might contain assignee changes).
-        Note: This API endpoint might not be available on all GitLab instances.
-        """
-        try:
-            response = requests.get(
-                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/events",
-                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
-            )
-            
-            if response.status_code == 200:
-                events = response.json()
-                # Filter for assignee-related events
-                assignee_events = [
-                    event for event in events 
-                    if event.get('action') in ['assigned', 'unassigned']
-                ]
-                return assignee_events
-            else:
-                logger.warning(f"Events API not available (status {response.status_code})")
-                return []
-                
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error getting issue events: {e}")
-            return []
-    
-    def get_full_task_history(self, project_id, issue_iid, include_comments=False):
+    def get_full_task_history(self, project_id: int, issue_iid: int, include_comments: bool = False) -> Dict:
         """
         Comprehensive method to get complete task history.
         """
@@ -337,10 +483,7 @@ class GitLabService:
                 while True:
                     response = requests.get(
                         f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
-                        params={
-                            'page': page,
-                            'per_page': 100
-                        },
+                        params={'page': page, 'per_page': 100},
                         headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
                     )
                     response.raise_for_status()
@@ -369,40 +512,42 @@ class GitLabService:
         
         return combined
 
-    def get_all_repos(self):
+    def get_all_repos(self) -> List[int]:
+        """Get all project IDs."""
         projects = []
         page = 1
         per_page = 100
-        logger.info("Start getting all repos")
-
+        
+        logger.info("Getting all projects...")
+        
         while True:
-            
             url = f"{self.config.gitlab_url}/api/v4/projects"
             params = {
-            "per_page": per_page,
-            "page": page,
-            "simple": "true",
-            "with_issues_enabled": "false",
-            "with_merge_requests_enabled": "false"
+                "per_page": per_page,
+                "page": page,
+                "simple": "true",
+                "with_issues_enabled": "false",
+                "with_merge_requests_enabled": "false"
             }
-
+            
             response = requests.get(
                 url,
                 params=params,
                 headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
             )
             response.raise_for_status()
-
+            
             page_projects = response.json()
             if not page_projects:
-                logger.info(f"No project on {page}. The end of parsing")
+                logger.info(f"No projects on page {page}. Finished parsing.")
                 break
-
-            # Extract only project IDs to reduce memory usage
+            
+            # Extract only project IDs
             page_project_ids = [project['id'] for project in page_projects]
             projects.extend(page_project_ids)
-
-            logger.info(f"Projects from page {page} was got")
-            page+=1
-
+            
+            logger.info(f"Got projects from page {page}")
+            page += 1
+        
+        logger.info(f"Total projects found: {len(projects)}")
         return projects
