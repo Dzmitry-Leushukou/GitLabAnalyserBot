@@ -567,3 +567,33 @@ class GitLabService:
         
         logger.info(f"Total projects found: {len(projects)}")
         return projects
+
+    def get_task_estimate_time(self, project_id: int, issue_iid: int) -> int:
+        """
+        Gets the estimate time for a specific task.
+        Returns the time in seconds.
+        """
+        try:
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}",
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            response.raise_for_status()
+            
+            issue = response.json()
+            
+            # GitLab has time tracking functionality with time estimates
+            # The estimate is stored in 'time_stats' field
+            time_stats = issue.get('time_stats', {})
+            if time_stats:
+                # 'time_estimate' is in seconds
+                estimate_time = time_stats.get('time_estimate', 0)
+                return estimate_time if estimate_time is not None else 0
+            else:
+                # If time_stats is not available, try to get it from the issue directly
+                # In some cases, GitLab might store it differently
+                return 0
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting estimate time for issue {issue_iid}: {e}")
+            return 0

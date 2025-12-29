@@ -72,6 +72,8 @@ class Handler:
                 await self.select_user(update, context, user_id)
             case "All user tasks":
                 await self.all_tasks(update, context)
+            case "Estimate Time":
+                await self.estimate_time(update, context)
             case "Back to workers":
                 await self.back_to_workers_menu(update, context)
             case _:
@@ -471,6 +473,209 @@ class Handler:
                  f"• {json_filename} (JSON data)\n\n"
                  f"Open: {open_tasks} | Closed: {closed_tasks}\n"
                  f"History events: {total_events}",
+            reply_markup=get_user_detail_menu()
+        )
+        
+        # Clean up progress message
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
+
+    async def estimate_time(self, update, context):
+        current_user = context.user_data.get('current_user', 'Unknown')
+        current_user_id = context.user_data.get('current_user_id', None)
+        
+        if current_user == "Unknown" or not current_user_id:
+            await update.message.reply_text(
+                text="Cannot get user information. Please try again.",
+                reply_markup=get_user_detail_menu()
+            )
+            return
+
+        from services.GitLabService import GitLabService
+        gitlab_service = GitLabService()
+        
+        # Show initial message
+        await update.message.reply_text(
+            text=f"🔍 Searching for all tasks where {current_user} was assignee...\n"
+                 f"This may take a while for large projects...",
+            reply_markup=get_user_detail_menu()
+        )
+        
+        # Get all tasks where user was assignee at any time
+        progress_msg = await update.message.reply_text(
+            text="Starting task search..."
+        )
+        
+        try:
+            # Use historical search method
+            tasks = gitlab_service.get_user_tasks(current_user_id)
+            
+            if not tasks:
+                await progress_msg.edit_text(
+                    text=f"No tasks found where {current_user} was ever assignee."
+                )
+                await update.message.reply_text(
+                    text="No tasks found for this user.",
+                    reply_markup=get_user_detail_menu()
+                )
+                return
+            
+            await progress_msg.edit_text(
+                text=f"✅ Found {len(tasks)} tasks\n"
+                     f"Now processing estimate times for each task..."
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting tasks: {e}")
+            await progress_msg.edit_text(
+                text=f"❌ Error searching for tasks: {str(e)}"
+            )
+            return
+        
+        # Process each task to get estimate time
+        task_details = []
+        processed_count = 0
+        errors_count = 0
+        
+        for task in tasks:
+            project_id = task.get('project_id')
+            issue_iid = task.get('iid')
+            
+            try:
+                # Get the task details with estimate time
+                estimated_time = gitlab_service.get_task_estimate_time(project_id, issue_iid)
+                
+                task_info = {
+                    'id': task.get('id'),
+                    'iid': task.get('iid'),
+                    'project_id': project_id,
+                    'title': task.get('title', ''),
+                    'state': task.get('state', ''),
+                    'estimated_time': estimated_time,
+                    'created_at': task.get('created_at', ''),
+                    'updated_at': task.get('updated_at', ''),
+                    'labels': task.get('labels', []),
+                    'assignee': task.get('assignee', {}),
+                    'author': task.get('author', {})
+                }
+                task_details.append(task_info)
+                
+            except Exception as e:
+                logger.error(f"Error processing task {task.get('id')}: {e}")
+                errors_count += 1
+                # Create minimal task info
+                task_info = {
+                    'id': task.get('id'),
+                    'iid': task.get('iid'),
+                    'project_id': project_id,
+                    'title': task.get('title', ''),
+                    'state': task.get('state', ''),
+                    'estimated_time': 'N/A',
+                    'created_at': task.get('created_at', ''),
+                    'updated_at': task.get('updated_at', ''),
+                    'labels': task.get('labels', []),
+                    'assignee': task.get('assignee', {}),
+                    'author': task.get('author', {})
+                }
+                task_details.append(task_info)
+            
+            processed_count += 1
+            
+            # Update progress
+            if processed_count % 5 == 0 or processed_count == len(tasks):
+                try:
+                    await progress_msg.edit_text(
+                        text=f"🔄 Processing tasks...\n"
+                             f"Progress: {processed_count}/{len(tasks)}\n"
+                             f"Errors: {errors_count}"
+                    )
+                except Exception:
+                    pass
+        
+        # Create JSON report
+        await progress_msg.edit_text(
+            text=f"✅ Processing complete!\n"
+                 f"Generating estimate time report for {len(task_details)} tasks..."
+        )
+        
+        # Create JSON report
+        import json
+        import io
+        
+        # Format the task details for JSON
+        json_output = {
+            'user': {
+                'username': current_user,
+                'user_id': current_user_id
+            },
+            'report_date': datetime.now().isoformat(),
+            'summary': {
+                'total_tasks': len(task_details),
+                'processing_errors': errors_count
+            },
+            'tasks': []
+        }
+        
+        for task in task_details:
+            # Format estimated time
+            estimated_time_seconds = task.get('estimated_time', 0)
+            if estimated_time_seconds != 'N/A':
+                # Convert seconds to human readable format (days, hours, minutes)
+                if estimated_time_seconds == 0:
+                    formatted_time = '0 seconds'
+                else:
+                    days = estimated_time_seconds // 86400
+                    hours = (estimated_time_seconds % 86400) // 3600
+                    minutes = (estimated_time_seconds % 3600) // 60
+                    seconds = estimated_time_seconds % 60
+                    
+                    formatted_parts = []
+                    if days > 0:
+                        formatted_parts.append(f"{days}d")
+                    if hours > 0:
+                        formatted_parts.append(f"{hours}h")
+                    if minutes > 0:
+                        formatted_parts.append(f"{minutes}m")
+                    if seconds > 0 or not formatted_parts:
+                        formatted_parts.append(f"{seconds}s")
+                    
+                    formatted_time = " ".join(formatted_parts)
+            else:
+                formatted_time = 'N/A'
+            
+            task_data = {
+                'Task ID': task['iid'],
+                'Task Title': task['title'],
+                'Project ID': task['project_id'],
+                'State': task['state'].upper(),
+                'Estimated Time (formatted)': formatted_time,
+                'Labels': task.get('labels', [])
+            }
+            
+            json_output['tasks'].append(task_data)
+        
+        # Convert to JSON string and then to bytes
+        json_content = json.dumps(json_output, indent=2, ensure_ascii=False)
+        json_bytes = io.BytesIO(json_content.encode('utf-8'))
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        json_filename = f"estimate_time_{current_user}_{timestamp}.json"
+        
+        await update.message.reply_document(
+            document=InputFile(json_bytes, filename=json_filename),
+            caption=f"⏱️ Estimate time report for {current_user} ({len(task_details)} tasks)",
+            reply_markup=get_user_detail_menu()
+        )
+        
+        # Final summary message
+        await update.message.reply_text(
+            text=f"✅ Estimate time report generation complete!\n\n"
+                 f"User: {current_user}\n"
+                 f"Total tasks: {len(task_details)}\n"
+                 f"File: {json_filename}\n\n"
+                 f"Processing errors: {errors_count}",
             reply_markup=get_user_detail_menu()
         )
         
