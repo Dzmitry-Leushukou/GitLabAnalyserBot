@@ -49,8 +49,8 @@ class GitLabService:
 
     def get_user_tasks(self, user_id: int) -> List[Dict]:
         """
-        Gets all tasks where the user was an assignee at any time.
-        Uses optimized search in recent projects.
+        Gets ALL tasks where the user was EVER an assignee.
+        Includes both current assignments and historical assignments.
         """
         # Get user info first
         user_info = self.get_user(user_id)
@@ -59,23 +59,23 @@ class GitLabService:
             return []
         
         username = user_info.get('username')
-        logger.info(f"Searching for tasks where user {username} was assignee...")
+        logger.info(f"Searching for ALL tasks where user {username} was EVER assignee...")
         
         # Get current tasks where user is assignee
         current_tasks = self._get_current_assignee_tasks(user_id)
         logger.info(f"Found {len(current_tasks)} current tasks")
         
-        # Get user's recent projects
-        recent_projects = self._get_user_recent_projects(user_id, limit=30)
-        logger.info(f"Will search in {len(recent_projects)} recent projects")
+        # Get ALL accessible projects
+        all_projects = self.get_all_repos()
+        logger.info(f"Will search in {len(all_projects)} total projects")
         
-        # Search for historical assignments in recent projects
+        # Search for historical assignments in ALL projects
         historical_tasks = []
         processed_projects = 0
         
-        for project_id in recent_projects:
+        for project_id in all_projects:
             try:
-                project_tasks = self._search_assignee_in_project(project_id, user_id, username)
+                project_tasks = self._search_assignee_in_project_history(project_id, user_id, username)
                 if project_tasks:
                     historical_tasks.extend(project_tasks)
                     logger.info(f"Project {project_id}: found {len(project_tasks)} historical tasks")
@@ -87,14 +87,14 @@ class GitLabService:
             processed_projects += 1
             
             # Progress update
-            if processed_projects % 5 == 0:
-                logger.info(f"Processed {processed_projects}/{len(recent_projects)} projects")
+            if processed_projects % 20 == 0:
+                logger.info(f"Processed {processed_projects}/{len(all_projects)} projects")
         
         # Combine and deduplicate
         all_tasks = current_tasks + historical_tasks
         unique_tasks = self._deduplicate_tasks(all_tasks)
         
-        logger.info(f"Total unique tasks found: {len(unique_tasks)}")
+        logger.info(f"Total unique tasks found: {len(unique_tasks)} (Current: {len(current_tasks)}, Historical: {len(historical_tasks)})")
         return unique_tasks
     
     def _get_current_assignee_tasks(self, user_id: int) -> List[Dict]:
@@ -134,42 +134,18 @@ class GitLabService:
         
         return tasks
     
-    def _get_user_recent_projects(self, user_id: int, limit: int = 30) -> List[int]:
-        """Get projects where user recently participated."""
+    def _search_assignee_in_project_history(self, project_id: int, user_id: int, username: str) -> List[Dict]:
+        """
+        Search for tasks in a project where user was EVER assignee.
+        Checks system notes for historical assignments.
+        """
         try:
-            # Try to get user events first
-            response = requests.get(
-                f"{self.config.gitlab_url}/api/v4/users/{user_id}/events",
-                params={'per_page': 50, 'page': 1},
-                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
-            )
+            # First check if project has issues enabled
+            project_info = self._get_project_info(project_id)
+            if not project_info.get('issues_enabled', True):
+                logger.debug(f"Project {project_id} has issues disabled, skipping")
+                return []
             
-            if response.status_code == 200:
-                events = response.json()
-                project_ids = set()
-                
-                for event in events:
-                    project_id = event.get('project_id')
-                    if project_id:
-                        project_ids.add(project_id)
-                    
-                    if len(project_ids) >= limit:
-                        break
-                
-                if project_ids:
-                    return list(project_ids)
-                    
-        except Exception as e:
-            logger.warning(f"Could not get user events: {e}")
-        
-        # Fallback: get some accessible projects
-        all_projects = self.get_all_repos()
-        return all_projects[:limit]
-    
-    def _search_assignee_in_project(self, project_id: int, user_id: int, username: str) -> List[Dict]:
-        """Search for tasks in a project where user was assignee."""
-        try:
-            # Get project tasks
             page = 1
             found_tasks = []
             
@@ -194,25 +170,16 @@ class GitLabService:
                 
                 # Check each task for assignee history
                 for task in tasks:
-                    # Check current assignee
-                    assignee = task.get('assignee')
-                    if assignee and assignee.get('id') == user_id:
-                        found_tasks.append(task)
-                        continue
-                    
-                    # Check if user mentioned in description
-                    description = task.get('description', '').lower()
-                    if f'@{username}'.lower() in description:
-                        found_tasks.append(task)
-                        continue
-                    
-                    # Check system notes for assignee history
                     task_iid = task.get('iid')
-                    if self._check_assignee_in_notes(project_id, task_iid, username):
-                        found_tasks.append(task)
+                    
+                    # Check if user was EVER assignee by checking system notes
+                    if self._check_user_was_assignee(project_id, task_iid, user_id, username):
+                        # Check if already found
+                        if not any(t.get('iid') == task_iid and t.get('project_id') == project_id for t in found_tasks):
+                            found_tasks.append(task)
                 
                 page += 1
-                if page > 3:  # Limit search depth
+                if page > 5:  # Limit search depth per project
                     break
                     
         except Exception as e:
@@ -220,36 +187,85 @@ class GitLabService:
         
         return found_tasks
     
-    def _check_assignee_in_notes(self, project_id: int, issue_iid: int, username: str) -> bool:
-        """Check if user was mentioned as assignee in system notes."""
+    def _get_project_info(self, project_id: int) -> Dict:
+        """Get basic project information."""
         try:
             response = requests.get(
-                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
-                params={'per_page': 20, 'page': 1},
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}",
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            if response.status_code == 200:
+                return response.json()
+        except Exception:
+            pass
+        return {}
+    
+    def _check_user_was_assignee(self, project_id: int, issue_iid: int, user_id: int, username: str) -> bool:
+        """
+        Check if user was EVER assignee for this issue.
+        Examines system notes for assignment history.
+        """
+        try:
+            # First check current assignee
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}",
                 headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
             )
             
-            if response.status_code != 200:
-                return False
+            if response.status_code == 200:
+                issue = response.json()
+                current_assignee = issue.get('assignee')
+                if current_assignee and current_assignee.get('id') == user_id:
+                    return True
             
-            notes = response.json()
-            for note in notes:
-                if note.get('system'):
-                    body = note.get('body', '').lower()
-                    # Check for assignee patterns
-                    patterns = [
-                        f'assigned to @{username}',
-                        f'reassigned to @{username}',
-                        f'unassigned @{username}',
-                        f'assigned to {username}',
-                    ]
-                    
-                    for pattern in patterns:
-                        if pattern.lower() in body:
+            # Check system notes for historical assignments
+            page = 1
+            while True:
+                response = requests.get(
+                    f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
+                    params={'per_page': 100, 'page': page},
+                    headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+                )
+                
+                if response.status_code != 200:
+                    break
+                
+                notes = response.json()
+                if not notes:
+                    break
+                
+                for note in notes:
+                    if note.get('system'):
+                        body = note.get('body', '').lower()
+                        
+                        # Check for assignee patterns with username
+                        patterns = [
+                            f'assigned to @{username}',
+                            f'reassigned to @{username}',
+                            f'unassigned @{username}',
+                            f'assigned to {username}',
+                            f'reassigned to {username}',
+                            f'unassigned {username}',
+                            f'assigned to @{username.lower()}',
+                            f'reassigned to @{username.lower()}'
+                        ]
+                        
+                        for pattern in patterns:
+                            if pattern in body:
+                                return True
+                        
+                        # Check for patterns like "Дмитрий Левшуков assigned to @d.leushukou"
+                        if 'assigned to' in body and f'@{username}' in body:
                             return True
-                            
-        except Exception:
-            pass
+                        if 'reassigned to' in body and f'@{username}' in body:
+                            return True
+                
+                page += 1
+                if page > 3:  # Limit notes pages
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error checking assignee history for issue {issue_iid}: {e}")
         
         return False
     
