@@ -73,6 +73,9 @@ class Handler:
                 await self.select_user(update, context, user_id)
             case "Estimate time":
                 await self.estimate_time(update,context)
+            case "Back to workers":
+                # Handle back button from user detail menu
+                await self.back_to_workers_menu(update, context)
             case _:
                 await update.message.reply_text(
                     text="Invalid option"
@@ -144,10 +147,22 @@ class Handler:
 
     async def estimate_time(self, update,context):
         current_user = context.user_data.get('current_user', 'Unknown')
+        from services.GitLabService import GitLabService
+        gitlab_service = GitLabService()
+        tasks = gitlab_service.get_all_tasks()
         if current_user=="Unknown":
             await update.message.reply_text(
             text="Can`t get info about user. Try again",
             reply_markup=get_worker_menu()
             )
+        
+    async def back_to_workers_menu(self, update, context):
+        logger.info("Back to workers menu")
+        # Get the current page from user context, default to 1 if not set
+        page = context.user_data.get('page', 1)
+        await update.message.reply_text(
+            text="Select a user:",
+            reply_markup=get_worker_menu(page)
+        )
         
         

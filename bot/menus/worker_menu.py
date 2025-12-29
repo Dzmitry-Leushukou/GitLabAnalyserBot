@@ -14,8 +14,7 @@ def get_worker_menu(page=1):
     for user in users:
         # Create a button for each user with their name
         user_button = KeyboardButton(f"{user.get('name', user.get('username', 'Unknown'))}")
-        estimated_time_button = KeyboardButton("Estimated Time")
-        buttons.append([user_button, estimated_time_button])
+        buttons.append([user_button])
     
     controls_row = []
     if page > 1:
@@ -35,7 +34,7 @@ def get_worker_menu(page=1):
 
 def get_user_detail_menu():
     """Menu that appears after selecting a user"""
-    back_button = KeyboardButton("Back")
+    back_button = KeyboardButton("Back to workers")
     estimate_time_button = KeyboardButton("Estimate time")
     buttons = [[estimate_time_button],[back_button]]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
