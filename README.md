@@ -13,6 +13,9 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 - **Pagination**: Navigate through users with Next/Previous controls
 - **Responsive Menus**: Interactive keyboard menus for easy navigation
 - **User Details**: Click on any user to view detailed information including name, username, and avatar
+- **User Tasks**: Get all tasks where the user was an assignee with full information
+- **Label History**: Access to label change history for each task
+- **Export Functionality**: Export user tasks with detailed information to a text file
 - **Configuration**: Environment-based configuration for easy setup
 
 ## Prerequisites
@@ -88,6 +91,9 @@ The bot provides a menu-based interface:
 The bot allows users to interact with GitLab user data:
 - **User Selection**: Tap on any user name to view detailed information
 - **User Details**: Displays name, username, and avatar URL for selected users
+- **User Tasks**: After selecting a user, tap "All user tasks" to get all tasks where the user was an assignee
+- **Task Information**: Detailed information about each task including title, state, creation/update dates, labels, author, assignee, and label change history
+- **Export**: Export user tasks with detailed information to a text file
 
 ### Navigation Controls
 

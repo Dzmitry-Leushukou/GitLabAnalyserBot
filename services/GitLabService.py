@@ -42,19 +42,75 @@ class GitLabService:
         )
         return response.json()
 
-    def get_all_tasks(self):
+    def get_user_tasks(self, user_id):
+        """
+        Gets all tasks where the user was an assignee.
+        """
         projects = self.get_all_repos()
         all_tasks = []
         for project in projects:
+            # Find tasks where the user was an assignee
             response = requests.get(
                 f"{self.config.gitlab_url}/api/v4/projects/{project}/issues",
-                params={'type': 'task'},
+                params={
+                    'assignee_id': user_id,
+                    'state': 'all'  # Get all tasks (open and closed)
+                },
                 headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
             )
             response.raise_for_status()
             tasks = response.json()
             all_tasks.extend(tasks)
         return all_tasks
+
+    def get_label_history(self, project_id, issue_iid):
+        """
+        Gets the label change history for a specific task.
+        """
+        try:
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/resource_label_events",
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            response.raise_for_status()
+            label_events = response.json()
+            
+            # Process and format events
+            events_by_date = []
+            for event in label_events:
+                # Convert event time
+                created_at = event.get('created_at')
+                
+                # Determine action type
+                action = event.get('action')
+                if action == "add":
+                    action_text = "added"
+                elif action == "remove":
+                    action_text = "removed"
+                else:
+                    action_text = action
+                
+                # Get user information
+                user_name = "Unknown user"
+                if event.get('user'):
+                    user_name = event['user'].get('name', 'Unknown user')
+                
+                event_info = {
+                    'timestamp': created_at,
+                    'label': event.get('label', {}).get('name', 'Unknown label'),
+                    'action': action_text,
+                    'user': user_name,
+                    'raw_action': action
+                }
+                events_by_date.append(event_info)
+            
+            # Sort events by time
+            events_by_date.sort(key=lambda x: x['timestamp'])
+            return events_by_date
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting label history: {e}")
+            return []
         
 
 

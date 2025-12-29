@@ -71,8 +71,8 @@ class Handler:
                 # Handle user selection - call get_user with the selected user ID
                 user_id = context.user_data['user_mapping'][username]
                 await self.select_user(update, context, user_id)
-            case "Estimate time":
-                await self.estimate_time(update,context)
+            case "All user tasks":
+                await self.all_tasks(update,context)
             case "Back to workers":
                 # Handle back button from user detail menu
                 await self.back_to_workers_menu(update, context)
@@ -128,8 +128,9 @@ class Handler:
         gitlab_service = GitLabService()
         user_data = gitlab_service.get_user(user_id)
         
-        # Store the current user in context
+        # Store the current user and user ID in context
         context.user_data['current_user'] = user_data.get('username', 'Unknown')
+        context.user_data['current_user_id'] = user_id
         
         # Format and send user information
         user_info = f"User Info:\n"
@@ -138,23 +139,107 @@ class Handler:
         if user_data.get('avatar_url'):
             user_info += f"Avatar URL: {user_data.get('avatar_url', 'N/A')}\n"
         
-        # Получаем страницу из контекста пользователя, если она есть, иначе используем 1
+        # Get page from user context, if exists, otherwise use 1
         page = context.user_data.get('page', 1)
         await update.message.reply_text(
             text=user_info,
             reply_markup=get_user_detail_menu()
         )
-
-    async def estimate_time(self, update,context):
+    async def all_tasks(self, update, context):
         current_user = context.user_data.get('current_user', 'Unknown')
+        current_user_id = context.user_data.get('current_user_id', None)
+        
+        if current_user == "Unknown" or not current_user_id:
+            await update.message.reply_text(
+                text="Can't get info about user. Try again",
+                reply_markup=get_worker_menu()
+            )
+            return
+
         from services.GitLabService import GitLabService
         gitlab_service = GitLabService()
-        tasks = gitlab_service.get_all_tasks()
-        if current_user=="Unknown":
+        
+        # Get user tasks by saved ID
+        tasks = gitlab_service.get_user_tasks(current_user_id)
+        
+        if not tasks:
             await update.message.reply_text(
-            text="Can`t get info about user. Try again",
-            reply_markup=get_worker_menu()
+                text="No tasks found for this user",
+                reply_markup=get_user_detail_menu()
             )
+            return
+        
+        # Form task information with label history
+        task_details = []
+        for task in tasks:
+            project_id = task.get('project_id')
+            issue_iid = task.get('iid')
+            
+            # Get label history for task
+            label_history = gitlab_service.get_label_history(project_id, issue_iid)
+            
+            task_info = {
+                'id': task.get('id'),
+                'iid': task.get('iid'),
+                'project_id': project_id,
+                'title': task.get('title', ''),
+                'description': task.get('description', ''),
+                'state': task.get('state', ''),
+                'created_at': task.get('created_at', ''),
+                'updated_at': task.get('updated_at', ''),
+                'labels': task.get('labels', []),
+                'assignee': task.get('assignee', {}),
+                'author': task.get('author', {}),
+                'label_history': label_history
+            }
+            task_details.append(task_info)
+        
+        # Create result file
+        import io
+        from telegram import InputFile
+        
+        # Form text file with task information
+        output = io.StringIO()
+        output.write(f"User tasks: {current_user}\n")
+        output.write(f"Total tasks: {len(task_details)}\n")
+        output.write("="*50 + "\n\n")
+        
+        for i, task in enumerate(task_details, 1):
+            output.write(f"{i}. Task #{task['iid']} (ID: {task['id']})\n")
+            output.write(f"   Project ID: {task['project_id']}\n")
+            output.write(f"   Title: {task['title']}\n")
+            output.write(f"   State: {task['state']}\n")
+            output.write(f"   Created at: {task['created_at']}\n")
+            output.write(f"   Updated at: {task['updated_at']}\n")
+            output.write(f"   Labels: {', '.join(task['labels']) if task['labels'] else 'no labels'}\n")
+            
+            if task['author']:
+                output.write(f"   Author: {task['author'].get('name', task['author'].get('username', 'Unknown'))}\n")
+            
+            if task['assignee']:
+                output.write(f"   Assignee: {task['assignee'].get('name', task['assignee'].get('username', 'Unknown'))}\n")
+            
+            if task['label_history']:
+                output.write(f"   Label change history:\n")
+                for event in task['label_history']:
+                    output.write(f"     - {event['timestamp']}: label '{event['label']}' {event['action']} by {event['user']}\n")
+            else:
+                output.write(f"   Label change history: not available\n")
+            
+            output.write("\n" + "-"*30 + "\n\n")
+        
+        # Send file to user
+        output_content = output.getvalue()
+        output_bytes = io.BytesIO(output_content.encode('utf-8'))
+        output_bytes.name = f"user_tasks_{current_user}.txt"
+        
+        await update.message.reply_document(
+            document=InputFile(output_bytes, filename=f"user_tasks_{current_user}.txt"),
+            caption=f"User tasks {current_user} (total: {len(task_details)})"
+        )
+        
+        output.close()
+        
         
     async def back_to_workers_menu(self, update, context):
         logger.info("Back to workers menu")

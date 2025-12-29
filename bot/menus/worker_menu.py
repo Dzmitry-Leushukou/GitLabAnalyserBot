@@ -35,6 +35,6 @@ def get_worker_menu(page=1):
 def get_user_detail_menu():
     """Menu that appears after selecting a user"""
     back_button = KeyboardButton("Back to workers")
-    estimate_time_button = KeyboardButton("Estimate time")
+    estimate_time_button = KeyboardButton("All user tasks")
     buttons = [[estimate_time_button],[back_button]]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
