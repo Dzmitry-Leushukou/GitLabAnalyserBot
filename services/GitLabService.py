@@ -2,6 +2,7 @@ from services.config import Config
 import logging
 import requests
 from typing import List, Dict, Optional
+from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class GitLabService:
     def get_label_history(self, project_id, issue_iid):
         """
         Gets the label change history for a specific task.
+        Returns list of events sorted by timestamp.
         """
         try:
             response = requests.get(
@@ -100,19 +102,272 @@ class GitLabService:
                     'label': event.get('label', {}).get('name', 'Unknown label'),
                     'action': action_text,
                     'user': user_name,
-                    'raw_action': action
+                    'raw_action': action,
+                    'type': 'label'
                 }
                 events_by_date.append(event_info)
             
-            # Sort events by time
-            events_by_date.sort(key=lambda x: x['timestamp'])
             return events_by_date
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting label history: {e}")
             return []
+    
+    def get_assignee_history(self, project_id, issue_iid):
+        """
+        Gets the assignee change history from system notes.
+        Returns list of assignee events sorted by timestamp.
+        """
+        try:
+            # First get all notes for the issue
+            page = 1
+            all_notes = []
+            
+            while True:
+                response = requests.get(
+                    f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
+                    params={
+                        'page': page,
+                        'per_page': 100
+                    },
+                    headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+                )
+                response.raise_for_status()
+                
+                notes = response.json()
+                if not notes:
+                    break
+                    
+                all_notes.extend(notes)
+                page += 1
+            
+            # Filter and process system notes about assignee changes
+            assignee_events = []
+            
+            for note in all_notes:
+                # Check if it's a system note about assignee
+                if note.get('system') and self._is_assignee_note(note.get('body', '')):
+                    body = note.get('body', '')
+                    created_at = note.get('created_at')
+                    
+                    # Parse assignee change information
+                    event_type, assignee_info = self._parse_assignee_note(body)
+                    
+                    assignee_events.append({
+                        'timestamp': created_at,
+                        'type': 'assignee',
+                        'action': event_type,
+                        'info': body,
+                        'assignee': assignee_info,
+                        'author': note.get('author', {}).get('name', 'Unknown user')
+                    })
+            
+            return assignee_events
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting assignee history: {e}")
+            return []
+    
+    def _is_assignee_note(self, note_body: str) -> bool:
+        """
+        Check if a system note is about assignee changes.
+        """
+        note_lower = note_body.lower()
+        assignee_keywords = [
+            'assigned', 'unassigned', 'reassigned',
+            'назначил', 'назначение', 'назначен'
+        ]
         
-
+        return any(keyword in note_lower for keyword in assignee_keywords)
+    
+    def _parse_assignee_note(self, note_body: str) -> tuple:
+        """
+        Parse assignee note to extract event type and assignee info.
+        Returns (event_type, assignee_info)
+        """
+        note_lower = note_body.lower()
+        
+        if 'unassigned' in note_lower or 'убрал назначение' in note_lower:
+            return 'unassigned', None
+        elif 'reassigned' in note_lower:
+            return 'reassigned', self._extract_username_from_note(note_body)
+        elif 'assigned' in note_lower or 'назначил' in note_lower:
+            return 'assigned', self._extract_username_from_note(note_body)
+        
+        return 'unknown', None
+    
+    def _extract_username_from_note(self, note_body: str) -> Optional[str]:
+        """
+        Extract username from note body.
+        Looks for @username patterns or mentions.
+        """
+        import re
+        
+        # Try to find @username pattern
+        username_match = re.search(r'@([\w\.\-]+)', note_body)
+        if username_match:
+            return username_match.group(1)
+        
+        # Try to find "to User Name" pattern
+        assigned_match = re.search(r'(?:to|на)\s+([^@\n]+)', note_body, re.IGNORECASE)
+        if assigned_match:
+            return assigned_match.group(1).strip()
+        
+        return None
+    
+    def get_combined_history(self, project_id, issue_iid):
+        """
+        Gets combined history of labels and assignee changes.
+        Returns sorted list of all events.
+        """
+        try:
+            # Get both histories
+            label_history = self.get_label_history(project_id, issue_iid)
+            assignee_history = self.get_assignee_history(project_id, issue_iid)
+            
+            # Combine and sort by timestamp
+            all_events = label_history + assignee_history
+            
+            # Convert timestamp strings to datetime for proper sorting
+            for event in all_events:
+                try:
+                    # Convert ISO format string to datetime
+                    event['timestamp_dt'] = datetime.fromisoformat(
+                        event['timestamp'].replace('Z', '+00:00')
+                    )
+                except (ValueError, AttributeError):
+                    # If conversion fails, use a far future date for sorting
+                    event['timestamp_dt'] = datetime.max
+            
+            # Sort by timestamp
+            all_events.sort(key=lambda x: x['timestamp_dt'])
+            
+            # Remove temporary datetime field
+            for event in all_events:
+                if 'timestamp_dt' in event:
+                    del event['timestamp_dt']
+            
+            # Get current task info for context
+            current_task = self._get_issue_info(project_id, issue_iid)
+            
+            return {
+                'task_info': current_task,
+                'total_events': len(all_events),
+                'label_events': len(label_history),
+                'assignee_events': len(assignee_history),
+                'history': all_events
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting combined history: {e}")
+            return {
+                'task_info': None,
+                'total_events': 0,
+                'label_events': 0,
+                'assignee_events': 0,
+                'history': []
+            }
+    
+    def _get_issue_info(self, project_id, issue_iid):
+        """
+        Get basic issue information.
+        """
+        try:
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}",
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            response.raise_for_status()
+            issue = response.json()
+            
+            return {
+                'id': issue.get('id'),
+                'iid': issue.get('iid'),
+                'title': issue.get('title'),
+                'state': issue.get('state'),
+                'current_labels': issue.get('labels', []),
+                'current_assignee': issue.get('assignee'),
+                'created_at': issue.get('created_at'),
+                'updated_at': issue.get('updated_at')
+            }
+        except Exception as e:
+            logger.error(f"Error getting issue info: {e}")
+            return None
+    
+    def get_issue_events(self, project_id, issue_iid):
+        """
+        Alternative method: Get issue events (might contain assignee changes).
+        Note: This API endpoint might not be available on all GitLab instances.
+        """
+        try:
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/events",
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            
+            if response.status_code == 200:
+                events = response.json()
+                # Filter for assignee-related events
+                assignee_events = [
+                    event for event in events 
+                    if event.get('action') in ['assigned', 'unassigned']
+                ]
+                return assignee_events
+            else:
+                logger.warning(f"Events API not available (status {response.status_code})")
+                return []
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error getting issue events: {e}")
+            return []
+    
+    def get_full_task_history(self, project_id, issue_iid, include_comments=False):
+        """
+        Comprehensive method to get complete task history.
+        """
+        # Get combined history
+        combined = self.get_combined_history(project_id, issue_iid)
+        
+        # Optionally get regular comments
+        if include_comments:
+            try:
+                page = 1
+                all_comments = []
+                
+                while True:
+                    response = requests.get(
+                        f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{issue_iid}/notes",
+                        params={
+                            'page': page,
+                            'per_page': 100
+                        },
+                        headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+                    )
+                    response.raise_for_status()
+                    
+                    comments = response.json()
+                    if not comments:
+                        break
+                        
+                    all_comments.extend(comments)
+                    page += 1
+                
+                # Filter out system notes (already in history)
+                regular_comments = [
+                    comment for comment in all_comments
+                    if not comment.get('system', False)
+                ]
+                
+                combined['comments'] = {
+                    'count': len(regular_comments),
+                    'list': regular_comments[:10]  # Return first 10 comments
+                }
+                
+            except Exception as e:
+                logger.error(f"Error getting comments: {e}")
+                combined['comments'] = {'count': 0, 'list': []}
+        
+        return combined
 
     def get_all_repos(self):
         projects = []
@@ -149,144 +404,5 @@ class GitLabService:
 
             logger.info(f"Projects from page {page} was got")
             page+=1
-        
+
         return projects
-
-    def get_assignee_history(self, project_id, issue_iid):
-        """
-        Gets the assignee change history for a specific task.
-        """
-        import gitlab
-        from datetime import datetime
-        
-        try:
-            # Connect to GitLab using the python-gitlab library
-            if self.config.gitlab_url:
-                gl = gitlab.Gitlab(url=self.config.gitlab_url, private_token=self.config.gitlab_token)
-            else:
-                gl = gitlab.Gitlab(private_token=self.config.gitlab_token)
-            
-            if self.config.gitlab_token and 'CI_JOB_TOKEN' not in self.config.gitlab_token:
-                gl.auth()
-            
-            # Get the project and issue
-            project = gl.projects.get(project_id)
-            issue = project.issues.get(issue_iid)
-            
-            # Get all notes for the issue
-            all_notes = issue.notes.list(all=True)
-            
-            assignee_history = []
-            for note in all_notes:
-                # Look for system notes about assignee changes
-                if note.system and "assignee" in note.body.lower():
-                    note_text = note.body.lower()
-                    created_at = datetime.fromisoformat(note.created_at.replace('Z', '+00:00'))
-                    
-                    # Determine action type
-                    if "assigned to" in note_text or "назначил" in note_text:
-                        action = "assigned"
-                        user_info = note.body
-                    elif "unassigned" in note_text or "убрал назначение" in note_text:
-                        action = "unassigned"
-                        user_info = "Unassigned"
-                    elif "reassigned to" in note_text:
-                        action = "reassigned"
-                        user_info = note.body
-                    else:
-                        continue  # Skip other system notes
-                    
-                    # Get author information
-                    author_name = "System"
-                    if note.author:
-                        author_name = note.author.get('name', 'Unknown author')
-                    
-                    event_info = {
-                        'timestamp': created_at,
-                        'action': action,
-                        'info': note.body,  # Full text of system note
-                        'author': author_name
-                    }
-                    assignee_history.append(event_info)
-            
-            # Sort events by time
-            assignee_history.sort(key=lambda x: x['timestamp'])
-            return assignee_history
-            
-        except Exception as e:
-            logger.error(f"Error getting assignee history: {e}")
-            return []
-
-    def get_full_issue_history(self, project_id, issue_iid):
-        """
-        Gets the complete history of changes for a specific task (labels + assignees).
-        """
-        import gitlab
-        from datetime import datetime
-        
-        try:
-            # Connect to GitLab using the python-gitlab library
-            if self.config.gitlab_url:
-                gl = gitlab.Gitlab(url=self.config.gitlab_url, private_token=self.config.gitlab_token)
-            else:
-                gl = gitlab.Gitlab(private_token=self.config.gitlab_token)
-            
-            if self.config.gitlab_token and 'CI_JOB_TOKEN' not in self.config.gitlab_token:
-                gl.auth()
-            
-            # Get the project and issue
-            project = gl.projects.get(project_id)
-            issue = project.issues.get(issue_iid)
-            
-            # Get all notes for the issue
-            all_notes = issue.notes.list(all=True)
-            
-            # Process all system notes
-            system_notes = []
-            for note in all_notes:
-                if note.system:
-                    created_at = datetime.fromisoformat(note.created_at.replace('Z', '+00:00'))
-                    author_name = "System"
-                    if note.author:
-                        author_name = note.author.get('name', 'Unknown author')
-                    
-                    system_note = {
-                        'timestamp': created_at,
-                        'body': note.body,
-                        'author': author_name
-                    }
-                    system_notes.append(system_note)
-            
-            # Sort by time
-            system_notes.sort(key=lambda x: x['timestamp'])
-            
-            # Group by change type
-            label_changes = []
-            assignee_changes = []
-            other_changes = []
-            
-            for note in system_notes:
-                body_lower = note['body'].lower()
-                
-                if "label" in body_lower:
-                    label_changes.append(note)
-                elif "assign" in body_lower or "назнач" in body_lower:
-                    assignee_changes.append(note)
-                else:
-                    other_changes.append(note)
-            
-            return {
-                'label_changes': label_changes,
-                'assignee_changes': assignee_changes,
-                'other_changes': other_changes,
-                'total_system_notes': len(system_notes)
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting full issue history: {e}")
-            return {
-                'label_changes': [],
-                'assignee_changes': [],
-                'other_changes': [],
-                'total_system_notes': 0
-            }
