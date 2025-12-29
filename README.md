@@ -25,7 +25,7 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/Dzmitry-Leushukou/GitLabAnalyserBot.git
 cd GitLabAnalytics
 ```
 
