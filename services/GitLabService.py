@@ -254,7 +254,7 @@ class GitLabService:
                             if pattern in body:
                                 return True
                         
-                        # Check for patterns like "Дмитрий Левшуков assigned to @d.leushukou"
+                        # Check for patterns like "Some User assigned to @username"
                         if 'assigned to' in body and f'@{username}' in body:
                             return True
                         if 'reassigned to' in body and f'@{username}' in body:
