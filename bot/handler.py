@@ -1,7 +1,7 @@
 from bot.config import Config
 from bot.menus.main_menu import get_main_menu
 from bot.menus.workers_menu import get_workers_menu
-from bot.menus.worker_menu import get_worker_menu
+from bot.menus.worker_menu import get_worker_menu, get_user_detail_menu
 from bot.menus.start_menu import get_start_menu
 import logging
 
@@ -26,6 +26,7 @@ class Handler:
             self._initialized = True
             self.current_users = {}  # Store current users for each user session
     
+    @staticmethod
     async def error_handler(update, context):
         logger = logging.getLogger(__name__)
         logger.error(f"Update {update} caused error {context.error}", exc_info=True)
@@ -70,6 +71,8 @@ class Handler:
                 # Handle user selection - call get_user with the selected user ID
                 user_id = context.user_data['user_mapping'][username]
                 await self.select_user(update, context, user_id)
+            case "Estimate time":
+                await self.estimate_time(update,context)
             case _:
                 await update.message.reply_text(
                     text="Invalid option"
@@ -122,6 +125,9 @@ class Handler:
         gitlab_service = GitLabService()
         user_data = gitlab_service.get_user(user_id)
         
+        # Store the current user in context
+        context.user_data['current_user'] = user_data.get('username', 'Unknown')
+        
         # Format and send user information
         user_info = f"User Info:\n"
         user_info += f"Name: {user_data.get('name', 'N/A')}\n"
@@ -129,7 +135,19 @@ class Handler:
         if user_data.get('avatar_url'):
             user_info += f"Avatar URL: {user_data.get('avatar_url', 'N/A')}\n"
         
+        # Получаем страницу из контекста пользователя, если она есть, иначе используем 1
+        page = context.user_data.get('page', 1)
         await update.message.reply_text(
             text=user_info,
-            reply_markup=get_main_menu()
+            reply_markup=get_user_detail_menu()
         )
+
+    async def estimate_time(self, update,context):
+        current_user = context.user_data.get('current_user', 'Unknown')
+        if current_user=="Unknown":
+            await update.message.reply_text(
+            text="Can`t get info about user. Try again",
+            reply_markup=get_worker_menu()
+            )
+        
+        
