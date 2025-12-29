@@ -14,8 +14,8 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 - **Responsive Menus**: Interactive keyboard menus for easy navigation
 - **User Details**: Click on any user to view detailed information including name, username, and avatar
 - **User Tasks**: Get all tasks where the user was an assignee with full information
-- **Label History**: Access to label change history for each task
-- **Export Functionality**: Export user tasks with detailed information to a text file
+- **Task History**: Access to comprehensive task history including label changes and assignee changes
+- **Export Functionality**: Export user tasks with detailed information to text or JSON files
 - **Configuration**: Environment-based configuration for easy setup
 
 ## Prerequisites
@@ -74,10 +74,18 @@ python bot/main.py
 
 2. Start the bot in Telegram by sending `/start` command
 3. Use the interactive menus to navigate through GitLab users
-
 ## Bot Commands
 
 - `/start` - Initialize the bot and show the start menu
+
+## Bot Features
+
+After selecting a user, you can access additional functionality:
+
+- **View User Tasks**: Get all tasks where the selected user was an assignee
+- **Task History**: View comprehensive history of label changes and assignee changes for each task
+- **Export Data**: Export user tasks with detailed information to text or JSON files
+
 
 ## Bot Interface
 
@@ -123,12 +131,13 @@ GitLabAnalytics/
     ├── config.py        # Service configuration
     └── GitLabService.py # GitLab API integration
 ```
-
 ## Dependencies
 
 - `python-telegram-bot>=20.0` - Telegram Bot API framework
 - `python-dotenv` - Environment variable management
 - `requests` - HTTP requests library
+- `python-gitlab` - GitLab API client library
+
 
 ## Development
 
