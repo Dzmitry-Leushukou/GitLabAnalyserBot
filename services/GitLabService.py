@@ -86,9 +86,7 @@ class GitLabService:
             
             processed_projects += 1
             
-            # Progress update
-            if processed_projects % 20 == 0:
-                logger.info(f"Processed {processed_projects}/{len(all_projects)} projects")
+            logger.info(f"Processed {processed_projects}/{len(all_projects)} projects")
         
         # Combine and deduplicate
         all_tasks = current_tasks + historical_tasks
@@ -123,10 +121,6 @@ class GitLabService:
                 
                 tasks.extend(page_tasks)
                 page += 1
-                
-                # Safety limit
-                if page > 10:
-                    break
                     
             except Exception as e:
                 logger.error(f"Error getting current tasks page {page}: {e}")
@@ -178,9 +172,8 @@ class GitLabService:
                         if not any(t.get('iid') == task_iid and t.get('project_id') == project_id for t in found_tasks):
                             found_tasks.append(task)
                 
+                logger.info(f"Found {len(found_tasks)} tasks in project {project_id}. Current page: {page}")
                 page += 1
-                if page > 5:  # Limit search depth per project
-                    break
                     
         except Exception as e:
             logger.error(f"Error searching project {project_id}: {e}")
@@ -261,8 +254,6 @@ class GitLabService:
                             return True
                 
                 page += 1
-                if page > 3:  # Limit notes pages
-                    break
                     
         except Exception as e:
             logger.error(f"Error checking assignee history for issue {issue_iid}: {e}")
@@ -597,3 +588,280 @@ class GitLabService:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting estimate time for issue {issue_iid}: {e}")
             return 0
+
+    def get_cycle_time(self, project_id: int, issue_iid: int, assignee_id: int = None) -> Dict:
+        """
+        Calculates the cycle time for a specific task.
+        Cycle time is the time the task spent with the 'doing' label AND when the specified user was assignee.
+        If assignee_id is not provided, calculates for the current assignee.
+        Returns a dictionary with cycle time information and assignee details.
+        """
+        def safe_timestamp_to_datetime(timestamp):
+            if isinstance(timestamp, str):
+                try:
+                    return datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                except ValueError:
+                    # If timestamp conversion fails, return a default datetime
+                    return datetime.min
+            elif isinstance(timestamp, datetime):
+                return timestamp
+            else:
+                return datetime.min
+        
+        try:
+            # Get combined history to track 'doing' label changes and assignee changes
+            combined_history = self.get_combined_history(project_id, issue_iid)
+            history_events = combined_history.get('history', [])
+            
+            # Get issue creation time
+            issue_info = self._get_issue_info(project_id, issue_iid)
+            if not issue_info:
+                return {
+                    'cycle_time_seconds': 0,
+                    'cycle_time_formatted': '0 seconds',
+                    'intervals': [],
+                    'assignees_during_cycle': [],
+                    'target_assignee_id': assignee_id
+                }
+            
+            created_at = issue_info.get('created_at')
+            created_datetime = safe_timestamp_to_datetime(created_at)
+            
+            # Track 'doing' label intervals
+            doing_intervals = []
+            assignees_during_cycle = []
+            current_doing_start = None
+            current_assignee_id = None
+            target_assignee_id = assignee_id
+            
+            # If assignee_id not provided, try to get current assignee's ID
+            if target_assignee_id is None and issue_info.get('current_assignee'):
+                target_assignee_id = issue_info['current_assignee'].get('id')
+            
+            # Get initial assignee from the issue info
+            if issue_info.get('current_assignee') and issue_info['current_assignee'].get('id'):
+                current_assignee_id = issue_info['current_assignee']['id']
+            
+            # Sort events by timestamp to process in chronological order
+            sorted_events = sorted(history_events, key=lambda x: safe_timestamp_to_datetime(x['timestamp']))
+            
+            for event in sorted_events:
+                event_time = safe_timestamp_to_datetime(event['timestamp'])
+                
+                # Handle label events
+                if event['type'] == 'label':
+                    label_name = event['label'].lower()
+                    
+                    # If 'doing' label was added and we're not already in a doing interval
+                    if label_name == 'doing' and event['raw_action'] == 'add':
+                        if current_doing_start is None:
+                            # Only start interval if target assignee is currently assigned
+                            if current_assignee_id == target_assignee_id:
+                                current_doing_start = event_time
+                    # If 'doing' label was removed and we're in a doing interval
+                    elif label_name == 'doing' and event['raw_action'] == 'remove':
+                        if current_doing_start is not None:
+                            # Close the current doing interval
+                            doing_intervals.append({
+                                'start': current_doing_start.isoformat(),
+                                'end': event_time.isoformat(),
+                                'duration': (event_time - current_doing_start).total_seconds(),
+                                'assignee_id': current_assignee_id
+                            })
+                            if current_assignee_id:
+                                assignees_during_cycle.append({
+                                    'assignee_id': current_assignee_id,
+                                    'interval_start': current_doing_start.isoformat(),
+                                    'interval_end': event_time.isoformat()
+                                })
+                            current_doing_start = None
+                
+                # Handle assignee events
+                elif event['type'] == 'assignee':
+                    action = event['action']
+                    assignee_info = event.get('assignee')
+                    
+                    if action == 'assigned' or action == 'reassigned':
+                        # Extract assignee ID by checking the author of the event or looking up the user
+                        assignee_username = assignee_info.get('name') if isinstance(assignee_info, dict) else assignee_info
+                        if assignee_username:
+                            # Look up user ID by username from the event author or by searching
+                            assignee_user = self._find_user_by_name(assignee_username)
+                            if assignee_user:
+                                new_assignee_id = assignee_user.get('id')
+                                # Check if this assignment affects our target interval
+                                was_in_doing = current_doing_start is not None
+                                
+                                current_assignee_id = new_assignee_id
+                                
+                                # If we were in a doing interval and the assignee changed to someone else, close the interval
+                                if was_in_doing and current_assignee_id != target_assignee_id:
+                                    doing_intervals.append({
+                                        'start': current_doing_start.isoformat(),
+                                        'end': event_time.isoformat(),
+                                        'duration': (event_time - current_doing_start).total_seconds(),
+                                        'assignee_id': current_assignee_id
+                                    })
+                                    if current_assignee_id:
+                                        assignees_during_cycle.append({
+                                            'assignee_id': current_assignee_id,
+                                            'interval_start': current_doing_start.isoformat(),
+                                            'interval_end': event_time.isoformat()
+                                        })
+                                    current_doing_start = None
+                                # If we weren't in a doing interval and assignee changed to target, check if in doing state
+                                elif not was_in_doing and current_assignee_id == target_assignee_id:
+                                    # Check if currently in 'doing' state
+                                    if self._is_issue_in_doing_state(project_id, issue_iid, event_time):
+                                        current_doing_start = event_time
+                                        
+                    elif action == 'unassigned':
+                        # Check if this affects our target interval
+                        was_in_doing = current_doing_start is not None
+                        
+                        current_assignee_id = None
+                        
+                        # If we were in a doing interval and assignee was unassigned, close the interval
+                        if was_in_doing and target_assignee_id is not None:
+                            doing_intervals.append({
+                                'start': current_doing_start.isoformat(),
+                                'end': event_time.isoformat(),
+                                'duration': (event_time - current_doing_start).total_seconds(),
+                                'assignee_id': None
+                            })
+                            assignees_during_cycle.append({
+                                'assignee_id': None,
+                                'interval_start': current_doing_start.isoformat(),
+                                'interval_end': event_time.isoformat()
+                            })
+                            current_doing_start = None
+            
+            # If still in a doing interval at the end of history, close it with the last event time
+            if current_doing_start is not None:
+                last_event_timestamp = sorted_events[-1]['timestamp'] if sorted_events else created_datetime
+                last_event_time = safe_timestamp_to_datetime(last_event_timestamp)
+                
+                doing_intervals.append({
+                    'start': current_doing_start.isoformat(),
+                    'end': last_event_time.isoformat(),
+                    'duration': (last_event_time - current_doing_start).total_seconds(),
+                    'assignee_id': current_assignee_id
+                })
+                if current_assignee_id:
+                    assignees_during_cycle.append({
+                        'assignee_id': current_assignee_id,
+                        'interval_start': current_doing_start.isoformat(),
+                        'interval_end': last_event_time.isoformat()
+                    })
+            
+            # Calculate total cycle time
+            total_cycle_time = sum(interval['duration'] for interval in doing_intervals)
+            
+            # Format total cycle time
+            if total_cycle_time <= 0:
+                formatted_time = '0 seconds'
+            else:
+                days = int(total_cycle_time // 86400)
+                hours = int((total_cycle_time % 86400) // 3600)
+                minutes = int((total_cycle_time % 3600) // 60)
+                seconds = int(total_cycle_time % 60)
+                
+                formatted_parts = []
+                if days > 0:
+                    formatted_parts.append(f"{days}d")
+                if hours > 0:
+                    formatted_parts.append(f"{hours}h")
+                if minutes > 0:
+                    formatted_parts.append(f"{minutes}m")
+                if seconds > 0 or not formatted_parts:
+                    formatted_parts.append(f"{seconds}s")
+                
+                formatted_time = " ".join(formatted_parts)
+            
+            return {
+                'cycle_time_seconds': int(total_cycle_time),
+                'cycle_time_formatted': formatted_time,
+                'intervals': doing_intervals,
+                'assignees_during_cycle': assignees_during_cycle,
+                'issue_info': issue_info,
+                'target_assignee_id': target_assignee_id
+            }
+                
+        except Exception as e:
+            logger.error(f"Error calculating cycle time for issue {issue_iid}: {e}")
+            return {
+                'cycle_time_seconds': 0,
+                'cycle_time_formatted': '0 seconds',
+                'intervals': [],
+                'assignees_during_cycle': [],
+                'target_assignee_id': assignee_id,
+                'error': str(e)
+            }
+    
+    def _find_user_by_name(self, username: str) -> Optional[Dict]:
+        """
+        Find user by username by searching through the API.
+        """
+        try:
+            # First try to get user by username
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/users",
+                params={'username': username},
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            response.raise_for_status()
+            users = response.json()
+            
+            if users:
+                return users[0]  # Return first match
+            
+            # If not found by username, try searching by name
+            response = requests.get(
+                f"{self.config.gitlab_url}/api/v4/users",
+                params={'search': username},
+                headers={'Authorization': 'Bearer ' + self.config.gitlab_token}
+            )
+            response.raise_for_status()
+            users = response.json()
+            
+            if users:
+                return users[0]  # Return first match
+            
+        except Exception as e:
+            logger.error(f"Error finding user by name {username}: {e}")
+        
+        return None
+    
+    def _is_issue_in_doing_state(self, project_id: int, issue_iid: int, at_time: datetime) -> bool:
+        """
+        Check if the issue was in 'doing' state at a specific time.
+        This requires checking the label history up to that point in time.
+        """
+        try:
+            # Get label history
+            label_events = self.get_label_history(project_id, issue_iid)
+            
+            # Filter events up to the specified time
+            relevant_events = []
+            for event in label_events:
+                event_time = datetime.fromisoformat(event['timestamp'].replace('Z', '+00:00'))
+                if event_time <= at_time:
+                    relevant_events.append(event)
+            
+            # Sort by timestamp
+            relevant_events.sort(key=lambda x: datetime.fromisoformat(x['timestamp'].replace('Z', '+00:00')))
+            
+            # Track the state of the 'doing' label
+            doing_active = False
+            for event in relevant_events:
+                if event['label'].lower() == 'doing':
+                    if event['raw_action'] == 'add':
+                        doing_active = True
+                    elif event['raw_action'] == 'remove':
+                        doing_active = False
+            
+            return doing_active
+            
+        except Exception as e:
+            logger.error(f"Error checking if issue {issue_iid} was in doing state: {e}")
+            return False

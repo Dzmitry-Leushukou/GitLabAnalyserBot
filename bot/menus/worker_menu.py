@@ -37,5 +37,6 @@ def get_user_detail_menu():
     back_button = KeyboardButton("Back to workers")
     all_tasks_button = KeyboardButton("All user tasks")
     estimate_time_button = KeyboardButton("Estimate Time")
-    buttons = [[all_tasks_button], [estimate_time_button], [back_button]]
+    cycle_time_button = KeyboardButton("Cycle Time")
+    buttons = [[all_tasks_button], [estimate_time_button], [cycle_time_button], [back_button]]
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
