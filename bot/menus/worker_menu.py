@@ -1,5 +1,4 @@
 from telegram import ReplyKeyboardMarkup, KeyboardButton
-from services.GitLabService import GitLabService
 
 def get_user_detail_menu():
     """Menu that appears after selecting a user"""
