@@ -84,7 +84,7 @@ class GitLabService:
             logger.error(f"Unexpected error fetching user {user_id}: {e}")
             return {}
         
-    async def get_all_historical_user_assignments(self, user_id: int, progress_callback=None) -> List[Dict]:
+    async def get_all_historical_user_assignments(self, user_id: int, username:str, progress_callback=None) -> List[Dict]:
         """Get all tasks where the user is an assignee or participant."""
         try:
             await self._ensure_session()
@@ -92,7 +92,13 @@ class GitLabService:
             if progress_callback:
                 await progress_callback("Fetching all tasks...", None)
             
-            tasks = await self.get_all_tasks()
+            # Step 1: Get all tasks
+            logger.info(f"Fetching all tasks for user {user_id}")
+            tasks = await self.get_all_tasks(progress_callback=progress_callback)
+            logger.info(f"Fetched {len(tasks)} tasks")
+
+            # Step 2: Filter tasks by user_id in participants
+            logger.info(f"Filtering tasks by user {user_id}")
             user_tasks = []
             
             for index, task in enumerate(tasks):
@@ -107,19 +113,12 @@ class GitLabService:
                         participant.get('id') == user_id 
                         for participant in participants
                     )
-                    
-                    # Also check if user is in assignees
-                    user_is_assignee = False
-                    if 'assignees' in task and task['assignees']:
-                        user_is_assignee = any(
-                            assignee.get('id') == user_id 
-                            for assignee in task['assignees']
-                        )
-                    
-                    if user_is_participant or user_is_assignee:
+                                     
+                    if user_is_participant:
                         user_tasks.append(task)
                     
-                    if tasks:  # Prevent division by zero
+                 
+                    if progress_callback and tasks:  # Prevent division by zero
                         progress = min(99, int(((index + 1) / len(tasks)) * 100))
                         await progress_callback(
                             f"🔍Filtering tasks...\n"
@@ -132,15 +131,48 @@ class GitLabService:
                     logger.warning(f"Error processing task {task.get('id')}: {e}")
                     continue
             
-            # Final progress update
             if progress_callback:
                 await progress_callback(
                     f"✅ Found {len(user_tasks)} tasks for user {user_id}",
                     100
                 )
             
-            return user_tasks
-            
+            logger.info(f"Returning {len(user_tasks)} tasks for user {user_id}")
+            # Step 3: Filter user tasks to assigned tasks
+
+            logger.info(f"Checking filtered tasks for user {user_id}")
+            if progress_callback:
+                await progress_callback("Checking filtered tasks...", None)
+            assigned_tasks = []
+
+            for index, task in enumerate(user_tasks):  # Use enumerate() to get index
+                if task.get('assignee_id') == user_id:
+                    assigned_tasks.append(task)
+                else:
+                    task_assignee = await self.check_task_assignee(username, task.get('project_id'), task.get('iid'))
+                    if task_assignee:
+                        assigned_tasks.append(task)
+
+                if progress_callback and user_tasks:  # Prevent division by zero
+                    progress = min(99, int(((index + 1) / len(user_tasks)) * 100))
+                    await progress_callback(
+                        f"❓Checking filtered tasks...\n"
+                        f"✅{len(assigned_tasks)} matches\n"
+                        f"▶️Progress: {index + 1}/{len(user_tasks)}",
+                        progress  
+                    )
+
+                    
+            if progress_callback:
+                await progress_callback(
+                    f"🎉 Loading completed!\n📊 Total user tasks: {len(assigned_tasks)}", 
+                    100
+                )
+
+
+            logger.info(f"Returning {len(assigned_tasks)} assigned tasks for user {user_id}")
+            return assigned_tasks
+
         except Exception as e:
             error_msg = f"❌ Unexpected error in get_all_historical_user_assignments: {e}"
             if progress_callback:
@@ -260,3 +292,58 @@ class GitLabService:
         except Exception as e:
             logger.error(f"Unexpected error fetching participants for project {project_id}, task {task_iid}: {e}")
             return []
+        
+    async def get_task_notes(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
+        """Get all notes for a specific issue/task from GitLab."""
+        await self._ensure_session()
+        
+        # Note: GitLab API uses project_id (numeric) and issue_iid (internal ID)
+        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/notes"
+        if params is None:
+            params = {}
+        try:        
+            async with self._session.get(url,params=params) as response:
+                if response.status == 404:
+                    # Task might not exist or user doesn't have permission
+                    logger.warning(f"Notes not found for project {project_id}, task {task_iid}")
+                    return []
+                
+                response.raise_for_status()
+                
+                notes = await response.json()
+                return notes
+                
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching notes for project {project_id}, task {task_iid}: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching notes for project {project_id}, task {task_iid}: {e}")
+            return []
+
+    async def check_task_assignee(self,username:str, project_id: int, task_iid: int) -> bool:
+        """Check if the current user is the assignee of a task."""
+        await self._ensure_session()
+        
+        notes = await self.get_task_notes(project_id, task_iid, params={'activity_filter': 'only_activity'})
+        for note in notes:
+            if note.get('system') and note.get('body'):
+                body = note['body'].lower()
+                
+                if any(pattern in body for pattern in [
+                    f'assigned to @{username}',
+                    f'assigned @{username}',
+                    f'назначил @{username}',
+                    f'назначил на @{username}',
+                    f'reassigned to @{username}'
+                ]):
+                    return True
+                    
+                import re
+                assign_match = re.search(
+                    r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
+                    body
+                )
+                if assign_match and assign_match.group(2) == username:
+                    return True
+        
+        return False
