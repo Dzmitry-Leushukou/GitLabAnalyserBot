@@ -2,20 +2,27 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 import logging
 from bot.config import Config
 from bot.handler import Handler
+from services import GitLabService
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-handler = Handler()
+gitlab_service = GitLabService()
+handler = Handler(gitlab_service)
 
 def main():
+    config = Config()
+    app = Application.builder().token(config.telegram_token).build()
+    
+    # Register handlers
+    register_handlers(app)
+    
     try:
-        config = Config()
-        app = Application.builder().token(config.telegram_token).build()
-        register_handlers(app)
         app.run_polling()
+    except KeyboardInterrupt:
+        logging.info("Bot interrupted by user")
     except Exception as e:
         logging.error(f"Error: {e}")
 
@@ -29,7 +36,6 @@ def register_command_handlers(app):
 
 def register_message_handlers(app):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message))
-
 
 
 if __name__ == '__main__':

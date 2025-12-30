@@ -1,9 +1,7 @@
 from telegram import ReplyKeyboardMarkup, KeyboardButton
-from services.GitLabService import GitLabService
 
-def get_workers_menu(page=1):
-    gitlab_service = GitLabService()
-    users = gitlab_service.get_users(page)
+async def get_workers_menu(gitlab_service, page=1):
+    users = await gitlab_service.get_users(page)
     
     if not users:
         back_button = KeyboardButton("Main menu")
@@ -21,7 +19,7 @@ def get_workers_menu(page=1):
         prev_button = KeyboardButton("Previous")
         controls_row.append(prev_button)
     
-    next_users = gitlab_service.get_users(page + 1)
+    next_users = await gitlab_service.get_users(page + 1)
     if next_users:
         next_button = KeyboardButton("Next")
         controls_row.append(next_button)
