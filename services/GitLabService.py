@@ -103,9 +103,17 @@ class GitLabService:
             
             for index, task in enumerate(tasks):
                 try:
+                    # Check if required fields exist before accessing them
+                    project_id = task.get('project_id')
+                    task_iid = task.get('iid')
+                    
+                    if project_id is None or task_iid is None:
+                        logger.warning(f"Missing project_id or iid for task {task.get('id', 'unknown')}")
+                        continue
+                        
                     participants = await self.get_task_participants(
-                        task.get('project_id'), 
-                        task.get('iid')
+                        project_id,
+                        task_iid
                     )
                     
                     # Check if user_id is in participants
@@ -148,7 +156,14 @@ class GitLabService:
                 if task.get('assignee_id') == user_id:
                     assigned_tasks.append(task)
                 else:
-                    task_assignee = await self.check_task_assignee(username, task.get('project_id'), task.get('iid'))
+                    project_id = task.get('project_id')
+                    task_iid = task.get('iid')
+                    
+                    if project_id is None or task_iid is None:
+                        logger.warning(f"Missing project_id or iid for task {task.get('id', 'unknown')}")
+                        continue
+                        
+                    task_assignee = await self.check_task_assignee(username, project_id, task_iid)
                     if task_assignee:
                         assigned_tasks.append(task)
 
@@ -379,11 +394,11 @@ class GitLabService:
         for index,task in enumerate(tasks):
             task_metrics = await self.get_task_metrics(task,username)
             tasks_with_metrics.append(task_metrics)
-            if progress_callback and index % self.config.progress_interval == 0:
-                progress_callback("Fetching tasks metrics...",((index+1)/(len(tasks)))*100)
+            if progress_callback and index % self.config.progress_step == 0:
+               await progress_callback("Fetching tasks metrics...",((index+1)/(len(tasks)))*100)
 
-
-        progress_callback("Fetching tasks metrics...",100)
+        if progress_callback: 
+            await progress_callback("Fetching tasks metrics...",100)
         return tasks_with_metrics
     
     async def get_resource_label_events(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
@@ -429,26 +444,24 @@ class GitLabService:
         logger.info(f"Retrieved {len(all_events)} resource label events for project {project_id}, task {task_iid}")
         return all_events
     
-
     async def get_task_metrics(self, task: Dict,username:str) -> Dict:
         task_metrics = {}
-        task_metrics['task_id'] = task['id']
-        task_metrics['task_iid'] = task['iid']
-        task_metrics['project_id'] = task['project_id']
-        task_metrics['title'] = task['title']
-        task_metrics['description'] = task['description']
-        task_metrics['created_at'] = task['created_at']
-        task_metrics['updated_at'] = task['updated_at']
-        task_metrics['closed_at'] = task['closed_at'] or ""
-        history=await self.get_task_notes(task['project_id'], task['iid'],params={'activity_filter': 'only_activity'})
+        task_metrics['task_id'] = task.get('id')
+        task_metrics['task_iid'] = task.get('iid')
+        task_metrics['project_id'] = task.get('project_id')
+        task_metrics['title'] = task.get('title')
+        task_metrics['description'] = task.get('description')
+        task_metrics['created_at'] = task.get('created_at')
+        task_metrics['updated_at'] = task.get('updated_at')
+        task_metrics['closed_at'] = task.get('closed_at') or ""
+        history=await self.get_task_notes(task.get('project_id'), task.get('iid'),params={'activity_filter': 'only_activity'})
         task_metrics['history']=history
 
-        labels_history=await self.get_task_labels(task['project_id'], task['iid'])
+        labels_history=await self.get_resource_label_events(task.get('project_id'), task.get('iid'))
         task_metrics['labels_history']=labels_history
 
-        await self.caclulate_metrics(history,labels_history,username,task_metrics)
+        task_metrics=await self.caclulate_metrics(history,labels_history,username,task_metrics)
         return task_metrics
-    
 
     async def caclulate_metrics(self, history: List[Dict],labels_history: List[Dict],username:str,task_metrics: Dict):
         sorted_history = sorted(history, key=lambda x: x['created_at'])
@@ -463,7 +476,8 @@ class GitLabService:
             else:
                 merged_history.append(sorted_labels_history[lh_index])
                 lh_index += 1
-
+        task_metrics['merged_history']=merged_history
+        return task_metrics
         cur_assignee = None
         cur_label = None
         cicle_history = []
@@ -473,8 +487,27 @@ class GitLabService:
         qa_time = 0
         qa_history = []
         for event in merged_history:
-            if event['action'] == 'assign':
-                cur_assignee = event['assignee']['username']
+            if event.get('system') and event.get('body'):
+                body = event['body'].lower()
+                
+                if any(pattern in body for pattern in [
+                    f'assigned to @{username}',
+                    f'assigned @{username}',
+                    f'назначил @{username}',
+                    f'назначил на @{username}',
+                    f'reassigned to @{username}'
+                ]):
+                    cur_assignee=username
+                    
+                import re
+                assign_match = re.search(
+                    r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
+                    body
+                )
+                if assign_match and assign_match.group(2) == username:
+                    cur_assignee=username
+                else:
+                    cur_assignee=None
             elif event['action'] == 'label':
                 cur_label = event['label']['name']
                 if cur_label == 'doing' and cur_assignee == username:
@@ -493,3 +526,4 @@ class GitLabService:
         task_metrics['review_history'] = review_history
         task_metrics['qa_time'] = qa_time
         task_metrics['qa_history'] = qa_history
+        return task_metrics

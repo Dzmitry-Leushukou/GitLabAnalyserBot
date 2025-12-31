@@ -184,7 +184,7 @@ class Handler:
         try:
             logger.info(f"Getting user metrics for {current_user}")
             # Get all tasks with progress updates
-            tasks = await self.gitlab_service.get_all_historical_user_assignments(
+            tasks = await self.gitlab_service.get_user_metrics(
                 current_user_id, current_user, progress_callback=update_status
             )
 
@@ -213,20 +213,20 @@ class Handler:
             json_output['tasks'] = []  # Initialize tasks array
 
             for index,task in enumerate(tasks):
-                task_notes=await self.gitlab_service.get_task_notes(task['project_id'],task['iid'], params={'activity_filter': 'only_activity'})
-                label_notes = await self.gitlab_service.get_resource_label_events(task['project_id'],task['iid'])
                 task_data = {
-                    'project_id': task['project_id'],
-                    'task_id': task['iid'],
-                    'title': task['title'],
-                    'description' : task['description'],
-                    'state': task['state'].upper(),
+                    'project_id': task.get('project_id'),
+                    'task_id': task.get('iid'),
+                    'title': task.get('title'),
+                    'description' : task.get('description'),
+                    'state': task.get('state', '').upper(),
                     'created_at': task.get('created_at'),
                     'updated_at': task.get('updated_at'),
                     'web_url': task.get('web_url'),
                     'labels': task.get('labels', []),
-                    'history_of_updates': task_notes,
-                    'history_of_labels': label_notes
+                    'history': task.get('history', []),
+                    'labels_history': task.get('labels_history', []),
+                    'merged_history': task.get('merged_history', [])
+                    
                 }
                 
                 if 'error' in task:
