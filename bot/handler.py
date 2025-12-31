@@ -171,11 +171,12 @@ class Handler:
                 elif percent >= 0:
                     # Create progress bar
                     bars = 10
-                    filled = min(bars, percent // 10)
+                    percent_int = int(round(percent))
+                    filled = int(min(bars, percent_int // 10))
                     empty = bars - filled
                     progress_bar = "█" * filled + "░" * empty
                     
-                    status_text = f"{text}\n\n{progress_bar} {percent}%"
+                    status_text = f"{text}\n\n{progress_bar} {percent_int}%"
                     await status_msg.edit_text(status_text)
             except Exception as e:
                 logger.error(f"Error updating status: {e}")
@@ -193,67 +194,9 @@ class Handler:
                 )
                 return
             
-            logger.info(tasks)
-            return
-            # Get estimate time for each task
-            task_details = []
-            errors_count = 0
             
-            for idx, task in enumerate(user_tasks, 1):
-                project_id = task.get('project_id')
-                issue_iid = task.get('iid')
-                
-                try:
-                    # Update status every 5 tasks or for first/last
-                    if idx % 5 == 0 or idx == 1 or idx == len(user_tasks):
-                        await status_msg.edit_text(
-                            text=f"⏱️ Processing tasks...\n"
-                                f"📊 Progress: {idx}/{len(user_tasks)}\n"
-                                f"❌ Errors: {errors_count}"
-                        )
-                    
-                    estimated_time = await self.gitlab_service.get_task_estimate_time(
-                        project_id, 
-                        issue_iid
-                    )
-                    
-                    task_info = {
-                        'id': task.get('id'),
-                        'iid': issue_iid,
-                        'project_id': project_id,
-                        'title': task.get('title', ''),
-                        'state': task.get('state', ''),
-                        'estimated_time': estimated_time,
-                        'created_at': task.get('created_at', ''),
-                        'updated_at': task.get('updated_at', ''),
-                        'web_url': task.get('web_url', ''),
-                        'labels': task.get('labels', []),
-                        'assignee': assignee,
-                    }
-                    task_details.append(task_info)
-                    
-                except Exception as e:
-                    logger.error(f"Error processing task {issue_iid}: {e}")
-                    errors_count += 1
-                    task_info = {
-                        'id': task.get('id'),
-                        'iid': issue_iid,
-                        'project_id': project_id,
-                        'title': task.get('title', ''),
-                        'state': task.get('state', ''),
-                        'estimated_time': 'N/A',
-                        'error': str(e),
-                        'web_url': task.get('web_url', ''),
-                    }
-                    task_details.append(task_info)
-            
-            # Create JSON report
-            await status_msg.edit_text(
-                text=f"📊 Generating report...\n"
-                    f"✅ Processed tasks: {len(task_details)}\n"
-                    f"❌ Errors: {errors_count}"
-            )
-            
+            # Create JSON report   
+            await update_status("📊Generating report...",0)
             json_output = {
                 'user': {
                     'username': current_user,
@@ -261,75 +204,49 @@ class Handler:
                 },
                 'report_date': datetime.now().isoformat(),
                 'summary': {
-                    'total_tasks_found': len(user_tasks),
-                    'successfully_processed': len(task_details) - errors_count,
-                    'processing_errors': errors_count,
-                    'tasks_with_estimates': sum(1 for t in task_details 
-                                            if t.get('estimated_time') not in [0, 'N/A', None])
-                },
-                'tasks': []
+                    'total_tasks_found': len(tasks)
+                }
             }
             
             # Prepare data for JSON
-            for task in task_details:
-                estimated = task.get('estimated_time', 0)
-                
-                # Format time
-                if estimated in ['N/A', None] or isinstance(estimated, str):
-                    formatted_time = 'N/A'
-                    total_seconds = 0
-                else:
-                    total_seconds = estimated
-                    if total_seconds == 0:
-                        formatted_time = '0 seconds'
-                    else:
-                        days = total_seconds // 86400
-                        hours = (total_seconds % 86400) // 3600
-                        minutes = (total_seconds % 3600) // 60
-                        seconds = total_seconds % 60
-                        
-                        parts = []
-                        if days > 0:
-                            parts.append(f"{days}d")
-                        if hours > 0:
-                            parts.append(f"{hours}h")
-                        if minutes > 0:
-                            parts.append(f"{minutes}m")
-                        if seconds > 0 or not parts:
-                            parts.append(f"{seconds}s")
-                        
-                        formatted_time = " ".join(parts)
+            notes = []
+            json_output['tasks'] = []  # Initialize tasks array
+
+            for index,task in enumerate(tasks):
+                task_notes=await self.gitlab_service.get_task_notes(task['project_id'],task['iid'], params={'activity_filter': 'only_activity'})
                 
                 task_data = {
+                    'project_id': task['project_id'],
                     'task_id': task['iid'],
                     'title': task['title'],
-                    'project_id': task['project_id'],
+                    'description' : task['description'],
                     'state': task['state'].upper(),
-                    'estimated_time_seconds': total_seconds,
-                    'estimated_time_formatted': formatted_time,
                     'created_at': task.get('created_at'),
                     'updated_at': task.get('updated_at'),
                     'web_url': task.get('web_url'),
                     'labels': task.get('labels', []),
-                    'has_error': 'error' in task
+                    'history_of_updates': task_notes
                 }
                 
                 if 'error' in task:
                     task_data['error'] = task['error']
                 
                 json_output['tasks'].append(task_data)
+                if (index%5==0):
+                    await update_status("📊Generating report...",((index+1)/len(tasks))*100)
+            
             
             # Generate file
             json_content = json.dumps(json_output, indent=2, ensure_ascii=False)
             json_bytes = io.BytesIO(json_content.encode('utf-8'))
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            json_filename = f"estimate_time_{current_user}_{timestamp}.json"
-            
+            json_filename = f"{current_user}_metrics_{timestamp}.json"
+            await update_status("📊Generating report...",100)
             # Send file
             await update.message.reply_document(
                 document=InputFile(json_bytes, filename=json_filename),
-                caption=f"⏱️ Time Estimate Report\n👤 {current_user}\n📊 {len(task_details)} tasks",
+                caption=f"⏱️ User Report\n👤 {current_user}\n📊 {len(tasks)} tasks",
                 reply_markup=get_user_detail_menu()
             )
             
@@ -337,14 +254,12 @@ class Handler:
             await status_msg.edit_text(
                 text=f"✅ Report ready!\n\n"
                     f"👤 User: {current_user}\n"
-                    f"📊 Total tasks: {len(task_details)}\n"
-                    f"✅ Success: {len(task_details) - errors_count}\n"
-                    f"❌ Errors: {errors_count}\n"
                     f"📁 File: {json_filename}"
             )
-            
+            return
+           
         except Exception as e:
-            logger.error(f"Error in estimate_time: {e}")
+            logger.error(f"Error in metrics: {e}")
             await status_msg.edit_text(
                 text=f"❌ An error occurred:\n{str(e)[:200]}"
             )

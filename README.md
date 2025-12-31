@@ -49,6 +49,7 @@ Edit the `.env` file with your specific configuration:
 ```env
 # Bot Configuration
 PAGE_SIZE=4
+PROGRESS_STEP=10
 
 # Telegram Configuration
 TELEGRAM_TOKEN=your-telegram-bot-token
@@ -61,6 +62,7 @@ GITLAB_TOKEN=your-gitlab-api-token
 ### Configuration Details
 
 - `PAGE_SIZE`: Number of users to display per page (default: 4)
+- `PROGRESS_STEP`: Interval for progress updates during task processing (default: 10)
 - `TELEGRAM_TOKEN`: Your Telegram bot token (obtained from @BotFather)
 - `GITLAB_URL`: URL of your GitLab instance (e.g., https://gitlab.com)
 - `GITLAB_TOKEN`: GitLab personal access token with appropriate permissions

@@ -118,7 +118,7 @@ class GitLabService:
                         user_tasks.append(task)
                     
                  
-                    if progress_callback and tasks:  # Prevent division by zero
+                    if progress_callback and tasks and index%self.config.progress_step==0:  # Prevent division by zero
                         progress = min(99, int(((index + 1) / len(tasks)) * 100))
                         await progress_callback(
                             f"🔍Filtering tasks...\n"
@@ -128,7 +128,8 @@ class GitLabService:
                         )
                             
                 except Exception as e:
-                    logger.warning(f"Error processing task {task.get('id')}: {e}")
+                    task_id = task.get('id', 'unknown')
+                    logger.warning(f"Error processing task {task_id}: {e}")
                     continue
             
             if progress_callback:
@@ -141,8 +142,6 @@ class GitLabService:
             # Step 3: Filter user tasks to assigned tasks
 
             logger.info(f"Checking filtered tasks for user {user_id}")
-            if progress_callback:
-                await progress_callback("Checking filtered tasks...", None)
             assigned_tasks = []
 
             for index, task in enumerate(user_tasks):  # Use enumerate() to get index
@@ -153,7 +152,7 @@ class GitLabService:
                     if task_assignee:
                         assigned_tasks.append(task)
 
-                if progress_callback and user_tasks:  # Prevent division by zero
+                if progress_callback and user_tasks and index%self.config.progress_step==0:  # Prevent division by zero
                     progress = min(99, int(((index + 1) / len(user_tasks)) * 100))
                     await progress_callback(
                         f"❓Checking filtered tasks...\n"
@@ -200,10 +199,7 @@ class GitLabService:
             
             while True:
                 params['page'] = page
-                
-                if progress_callback:
-                    await progress_callback(f"📥 Loading page {page}...", None)
-                
+                            
                 async with self._session.get(url, params=params) as response:
                     response.raise_for_status()
                     
@@ -224,15 +220,14 @@ class GitLabService:
                             try:
                                 total_pages = int(total_pages)
                                 total_items = int(total_items)
-                                percent = min(95, int((page / total_pages) * 95))
+                                percent = page/total_pages * 100
                                 await progress_callback(
                                     f"{status}\n📄 Page {page}/{total_pages}",
                                     percent
                                 )
                             except (ValueError, ZeroDivisionError):
                                 await progress_callback(
-                                    f"{status}\n📄 Page {page}",
-                                    None
+                                    f"{status}\n📄 Page {page}",None
                                 )
                         else:
                             await progress_callback(

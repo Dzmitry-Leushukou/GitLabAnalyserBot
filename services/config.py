@@ -12,10 +12,18 @@ class Config:
             
             cls._instance.__gitlab_url = os.getenv("GITLAB_URL")
             cls._instance.__gitlab_token = os.getenv("GITLAB_TOKEN")
-            cls._instance.__page_size = os.getenv("PAGE_SIZE")
+            page_size_env = os.getenv("PAGE_SIZE")
+            progress_step_env = os.getenv("PROGRESS_STEP")
+            
+            if not page_size_env or not progress_step_env:
+                raise ValueError("PAGE_SIZE or PROGRESS_STEP is not set")
+            
+            try:
+                cls._instance.__page_size = int(page_size_env)
+                cls._instance.__progress_step = int(progress_step_env)
+            except ValueError:
+                raise ValueError("PAGE_SIZE and PROGRESS_STEP must be valid integers")
 
-            if not cls._instance.__page_size:
-                raise ValueError("PAGE_SIZE is not set")
             if not cls._instance.__gitlab_url:
                 raise ValueError("GITLAB_URL is not set")
             if not cls._instance.__gitlab_token:
@@ -34,3 +42,7 @@ class Config:
     @property
     def page_size(self):
         return self.__page_size
+    
+    @property
+    def progress_step(self):
+        return self.__progress_step
