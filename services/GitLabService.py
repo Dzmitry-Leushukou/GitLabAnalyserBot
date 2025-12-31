@@ -386,44 +386,6 @@ class GitLabService:
         progress_callback("Fetching tasks metrics...",100)
         return tasks_with_metrics
     
-    async def get_task_metrics(self, task: Dict,username:str) -> Dict:
-        task_metrics = {}
-        task_metrics['task_id'] = task['id']
-        task_metrics['task_iid'] = task['iid']
-        task_metrics['project_id'] = task['project_id']
-        task_metrics['title'] = task['title']
-        task_metrics['description'] = task['description']
-        task_metrics['created_at'] = task['created_at']
-        task_metrics['updated_at'] = task['updated_at']
-        task_metrics['closed_at'] = task['closed_at'] or ""
-        history=await self.get_task_notes(task['project_id'], task['iid'],params={'activity_filter': 'only_activity'})
-        task_metrics['history']=history
-        
-        await self._ensure_session()
-        for note in history:
-            if note.get('system') and note.get('body'):
-                body = note['body'].lower()
-                
-                if any(pattern in body for pattern in [
-                    f'assigned to @{username}',
-                    f'assigned @{username}',
-                    f'назначил @{username}',
-                    f'назначил на @{username}',
-                    f'reassigned to @{username}'
-                ]):
-                    return True
-                    
-                import re
-                assign_match = re.search(
-                    r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
-                    body
-                )
-                if assign_match and assign_match.group(2) == username:
-                    return task_metrics
-        cicle_time=0
-        cicle_hisyory={}
-        return task_metrics
-    
     async def get_resource_label_events(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
         """Get ALL resource label events for a specific issue/task from GitLab."""
         await self._ensure_session()
@@ -466,3 +428,68 @@ class GitLabService:
         
         logger.info(f"Retrieved {len(all_events)} resource label events for project {project_id}, task {task_iid}")
         return all_events
+    
+
+    async def get_task_metrics(self, task: Dict,username:str) -> Dict:
+        task_metrics = {}
+        task_metrics['task_id'] = task['id']
+        task_metrics['task_iid'] = task['iid']
+        task_metrics['project_id'] = task['project_id']
+        task_metrics['title'] = task['title']
+        task_metrics['description'] = task['description']
+        task_metrics['created_at'] = task['created_at']
+        task_metrics['updated_at'] = task['updated_at']
+        task_metrics['closed_at'] = task['closed_at'] or ""
+        history=await self.get_task_notes(task['project_id'], task['iid'],params={'activity_filter': 'only_activity'})
+        task_metrics['history']=history
+
+        labels_history=await self.get_task_labels(task['project_id'], task['iid'])
+        task_metrics['labels_history']=labels_history
+
+        await self.caclulate_metrics(history,labels_history,username,task_metrics)
+        return task_metrics
+    
+
+    async def caclulate_metrics(self, history: List[Dict],labels_history: List[Dict],username:str,task_metrics: Dict):
+        sorted_history = sorted(history, key=lambda x: x['created_at'])
+        sorted_labels_history = sorted(labels_history, key=lambda x: x['created_at'])
+        sh_index = 0
+        lh_index = 0
+        merged_history = []
+        while sh_index < len(sorted_history) and lh_index < len(sorted_labels_history):
+            if sorted_history[sh_index]['created_at'] < sorted_labels_history[lh_index]['created_at']:
+                merged_history.append(sorted_history[sh_index])
+                sh_index += 1
+            else:
+                merged_history.append(sorted_labels_history[lh_index])
+                lh_index += 1
+
+        cur_assignee = None
+        cur_label = None
+        cicle_history = []
+        cicle_time = 0
+        review_time = 0
+        review_history = []
+        qa_time = 0
+        qa_history = []
+        for event in merged_history:
+            if event['action'] == 'assign':
+                cur_assignee = event['assignee']['username']
+            elif event['action'] == 'label':
+                cur_label = event['label']['name']
+                if cur_label == 'doing' and cur_assignee == username:
+                    cicle_history.append(event)
+                    cicle_time += event['duration']
+                elif cur_label == 'review' and cur_assignee == username:
+                    review_history.append(event)
+                    review_time += event['duration']
+                elif cur_label == 'qa' and cur_assignee == username:
+                    qa_history.append(event)
+                    qa_time += event['duration']
+    
+        task_metrics['cicle_time'] = cicle_time
+        task_metrics['cicle_history'] = cicle_history
+        task_metrics['review_time'] = review_time
+        task_metrics['review_history'] = review_history
+        task_metrics['qa_time'] = qa_time
+        task_metrics['qa_history'] = qa_history
