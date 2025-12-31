@@ -263,57 +263,86 @@ class GitLabService:
             return []
         
     async def get_task_participants(self, project_id: int, task_iid: int) -> list:
-        """Get all participants for a specific issue/task from GitLab."""
+        """Get ALL participants for a specific issue/task from GitLab with pagination."""
         await self._ensure_session()
+        all_participants = []
+        page = 1
+        per_page = 100  
+
+        while True:
+            url = (
+                f"{self.config.gitlab_url}/api/v4/projects/{project_id}/"
+                f"issues/{task_iid}/participants"
+                f"?page={page}&per_page={per_page}"
+            )
+            
+            try:
+                async with self._session.get(url) as response:
+                    if response.status == 404:
+                        logger.warning(f"Task or participants not found for project {project_id}, task {task_iid}")
+                        break
+                    
+                    response.raise_for_status()
+                    
+                    participants = await response.json()
+                    if not participants:  
+                        break
+                        
+                    all_participants.extend(participants)
+                    page += 1
+                    
+            except aiohttp.ClientError as e:
+                logger.error(f"Error fetching participants page {page}: {e}")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error on page {page}: {e}")
+                break
         
-        # Note: GitLab API uses project_id (numeric) and issue_iid (internal ID)
-        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/participants"
-        
-        try:        
-            async with self._session.get(url) as response:
-                if response.status == 404:
-                    # Task might not exist or user doesn't have permission
-                    logger.warning(f"Participants not found for project {project_id}, task {task_iid}")
-                    return []
-                
-                response.raise_for_status()
-                
-                participants = await response.json()
-                return participants
-                
-        except aiohttp.ClientError as e:
-            logger.error(f"Error fetching participants for project {project_id}, task {task_iid}: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error fetching participants for project {project_id}, task {task_iid}: {e}")
-            return []
+        logger.info(f"Retrieved {len(all_participants)} participants for task {task_iid}")
+        return all_participants
         
     async def get_task_notes(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
-        """Get all notes for a specific issue/task from GitLab."""
+        """Get ALL notes for a specific issue/task from GitLab."""
         await self._ensure_session()
         
-        # Note: GitLab API uses project_id (numeric) and issue_iid (internal ID)
-        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/notes"
-        if params is None:
-            params = {}
-        try:        
-            async with self._session.get(url,params=params) as response:
-                if response.status == 404:
-                    # Task might not exist or user doesn't have permission
-                    logger.warning(f"Notes not found for project {project_id}, task {task_iid}")
-                    return []
-                
-                response.raise_for_status()
-                
-                notes = await response.json()
-                return notes
-                
-        except aiohttp.ClientError as e:
-            logger.error(f"Error fetching notes for project {project_id}, task {task_iid}: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error fetching notes for project {project_id}, task {task_iid}: {e}")
-            return []
+        all_notes = []
+        page = 1
+        
+        request_params = params.copy() if params else {}
+        
+        while True:
+            request_params.update({"page": page, "per_page": 100})
+            
+            url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/notes"
+            
+            try:
+                async with self._session.get(url, params=request_params) as response:
+                    if response.status == 404:
+                        logger.warning(f"Notes not found for project {project_id}, task {task_iid}")
+                        break
+                    
+                    response.raise_for_status()
+                    
+                    notes = await response.json()
+                    if not notes: 
+                        break
+                    
+                    all_notes.extend(notes)
+                    
+                    if len(notes) < 100:
+                        break
+                        
+                    page += 1
+                    
+            except aiohttp.ClientError as e:
+                logger.error(f"Error fetching notes for project {project_id}, task {task_iid}, page {page}: {e}")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error fetching notes for project {project_id}, task {task_iid}, page {page}: {e}")
+                break
+        
+        logger.info(f"Retrieved {len(all_notes)} notes for project {project_id}, task {task_iid}")
+        return all_notes
 
     async def check_task_assignee(self,username:str, project_id: int, task_iid: int) -> bool:
         """Check if the current user is the assignee of a task."""
@@ -396,26 +425,44 @@ class GitLabService:
         return task_metrics
     
     async def get_resource_label_events(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
-        """Get all resource label events for a specific issue/task from GitLab."""
+        """Get ALL resource label events for a specific issue/task from GitLab."""
         await self._ensure_session()
         
-        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/resource_label_events"
-        if params is None:
-            params = {}
-        try:
-            async with self._session.get(url, params=params) as response:
-                if response.status == 404:
-                    logger.warning(f"Resource label events not found for project {project_id}, task {task_iid}")
-                    return []
-                
-                response.raise_for_status()
-                
-                events = await response.json()
-                return events
-                
-        except aiohttp.ClientError as e:
-            logger.error(f"Error fetching resource label events for project {project_id}, task {task_iid}: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Unexpected error fetching resource label events for project {project_id}, task {task_iid}: {e}")
-            return []
+        all_events = []
+        page = 1
+        
+        request_params = params.copy() if params else {}
+        
+        while True:
+            request_params.update({"page": page, "per_page": 100})
+            
+            url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/resource_label_events"
+            
+            try:
+                async with self._session.get(url, params=request_params) as response:
+                    if response.status == 404:
+                        logger.warning(f"Resource label events not found for project {project_id}, task {task_iid}")
+                        break
+                    
+                    response.raise_for_status()
+                    
+                    events = await response.json()
+                    if not events: 
+                        break
+                    
+                    all_events.extend(events)
+                    
+                    if len(events) < 100:
+                        break
+                        
+                    page += 1
+                    
+            except aiohttp.ClientError as e:
+                logger.error(f"Error fetching resource label events for project {project_id}, task {task_iid}, page {page}: {e}")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error fetching resource label events for project {project_id}, task {task_iid}, page {page}: {e}")
+                break
+        
+        logger.info(f"Retrieved {len(all_events)} resource label events for project {project_id}, task {task_iid}")
+        return all_events
