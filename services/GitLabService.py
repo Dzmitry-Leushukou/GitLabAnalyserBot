@@ -342,3 +342,80 @@ class GitLabService:
                     return True
         
         return False
+    
+    async def get_user_metrics(self, user_id: int, username:str, progress_callback=None) -> List[Dict]:
+        tasks = await self.get_all_historical_user_assignments(user_id, username, progress_callback)
+        tasks_with_metrics = []
+
+        for index,task in enumerate(tasks):
+            task_metrics = await self.get_task_metrics(task,username)
+            tasks_with_metrics.append(task_metrics)
+            if progress_callback and index % self.config.progress_interval == 0:
+                progress_callback("Fetching tasks metrics...",((index+1)/(len(tasks)))*100)
+
+
+        progress_callback("Fetching tasks metrics...",100)
+        return tasks_with_metrics
+    
+    async def get_task_metrics(self, task: Dict,username:str) -> Dict:
+        task_metrics = {}
+        task_metrics['task_id'] = task['id']
+        task_metrics['task_iid'] = task['iid']
+        task_metrics['project_id'] = task['project_id']
+        task_metrics['title'] = task['title']
+        task_metrics['description'] = task['description']
+        task_metrics['created_at'] = task['created_at']
+        task_metrics['updated_at'] = task['updated_at']
+        task_metrics['closed_at'] = task['closed_at'] or ""
+        history=await self.get_task_notes(task['project_id'], task['iid'],params={'activity_filter': 'only_activity'})
+        task_metrics['history']=history
+        
+        await self._ensure_session()
+        for note in history:
+            if note.get('system') and note.get('body'):
+                body = note['body'].lower()
+                
+                if any(pattern in body for pattern in [
+                    f'assigned to @{username}',
+                    f'assigned @{username}',
+                    f'назначил @{username}',
+                    f'назначил на @{username}',
+                    f'reassigned to @{username}'
+                ]):
+                    return True
+                    
+                import re
+                assign_match = re.search(
+                    r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
+                    body
+                )
+                if assign_match and assign_match.group(2) == username:
+                    return task_metrics
+        cicle_time=0
+        cicle_hisyory={}
+        return task_metrics
+    
+    async def get_resource_label_events(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
+        """Get all resource label events for a specific issue/task from GitLab."""
+        await self._ensure_session()
+        
+        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues/{task_iid}/resource_label_events"
+        if params is None:
+            params = {}
+        try:
+            async with self._session.get(url, params=params) as response:
+                if response.status == 404:
+                    logger.warning(f"Resource label events not found for project {project_id}, task {task_iid}")
+                    return []
+                
+                response.raise_for_status()
+                
+                events = await response.json()
+                return events
+                
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching resource label events for project {project_id}, task {task_iid}: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching resource label events for project {project_id}, task {task_iid}: {e}")
+            return []

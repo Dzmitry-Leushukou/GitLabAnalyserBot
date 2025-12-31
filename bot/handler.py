@@ -214,7 +214,7 @@ class Handler:
 
             for index,task in enumerate(tasks):
                 task_notes=await self.gitlab_service.get_task_notes(task['project_id'],task['iid'], params={'activity_filter': 'only_activity'})
-                
+                label_notes = await self.gitlab_service.get_resource_label_events(task['project_id'],task['iid'])
                 task_data = {
                     'project_id': task['project_id'],
                     'task_id': task['iid'],
@@ -225,7 +225,8 @@ class Handler:
                     'updated_at': task.get('updated_at'),
                     'web_url': task.get('web_url'),
                     'labels': task.get('labels', []),
-                    'history_of_updates': task_notes
+                    'history_of_updates': task_notes,
+                    'history_of_labels': label_notes
                 }
                 
                 if 'error' in task:
@@ -263,6 +264,7 @@ class Handler:
             await status_msg.edit_text(
                 text=f"❌ An error occurred:\n{str(e)[:200]}"
             )
+ 
     async def back_to_workers_menu(self, update, context):
         logger.info("Back to workers menu")
         page = context.user_data.get('page', 1)
