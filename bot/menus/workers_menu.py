@@ -1,6 +1,16 @@
 from telegram import ReplyKeyboardMarkup, KeyboardButton
 
 async def get_workers_menu(gitlab_service, page=1):
+    """
+    Create and return the workers menu keyboard with paginated user list.
+    
+    Args:
+        gitlab_service: The GitLab service instance to fetch users
+        page: The page number for pagination (default: 1)
+        
+    Returns:
+        ReplyKeyboardMarkup: The workers menu keyboard markup
+    """
     users = await gitlab_service.get_users(page)
     
     if not users:

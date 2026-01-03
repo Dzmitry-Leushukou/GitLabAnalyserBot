@@ -18,12 +18,27 @@ class Handler:
     _instance = None
     
     def __new__(cls, gitlab_service=None):
+        """
+        Singleton implementation to ensure only one instance of Handler exists.
+        
+        Args:
+            gitlab_service: Optional GitLab service instance to inject
+            
+        Returns:
+            Handler: The single instance of the Handler class
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self, gitlab_service=None):
+        """
+        Initialize the Handler instance with configuration and services.
+        
+        Args:
+            gitlab_service: Optional GitLab service instance to inject
+        """
         if not self._initialized:
             self.config = Config()
             self._initialized = True
@@ -32,9 +47,23 @@ class Handler:
     
     @staticmethod
     async def error_handler(update, context):
+        """
+        Handle errors that occur during bot operation.
+        
+        Args:
+            update: The update object that caused the error
+            context: The context object containing error information
+        """
         logger.error(f"Update {update} caused error {context.error}", exc_info=True)
 
     async def start(self, update, context):
+        """
+        Handle the /start command from users.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         logger.info("Start command")
         await update.message.reply_text(
             text="Welcome! Press the Start button to begin:",
@@ -42,6 +71,13 @@ class Handler:
         )
 
     async def handle_message(self, update, context):
+        """
+        Handle incoming text messages from users and route them to appropriate functions.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         text = update.message.text
         
         match text:
@@ -79,6 +115,13 @@ class Handler:
                 await update.message.reply_text(text="Invalid option")
     
     async def workers_message(self, update, context):
+        """
+        Handle the workers message request, displaying paginated list of GitLab users.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         logger.info("Workers message")
         
         if 'page' not in context.user_data:
@@ -103,6 +146,13 @@ class Handler:
         )
     
     async def back_to_main_menu_message(self, update, context):
+        """
+        Handle returning to the main menu.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         logger.info("Back to Main menu message")
         await update.message.reply_text(
             text="Choose option:",
@@ -110,6 +160,13 @@ class Handler:
         )
 
     async def worker_message(self, update, context):
+        """
+        Handle the worker message request, displaying list of GitLab users.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         logger.info("Worker message")
         reply_markup = await get_workers_menu(self.gitlab_service)
         await update.message.reply_text(
@@ -118,6 +175,14 @@ class Handler:
         )
 
     async def select_user(self, update, context, user_id):
+        """
+        Handle user selection, displaying detailed information about the selected user.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+            user_id: The ID of the selected user
+        """
         logger.info(f"Selected user with ID: {user_id}")
         user_data = await self.gitlab_service.get_user(user_id)
         
@@ -226,6 +291,13 @@ class Handler:
             return f"{seconds}s"
 
     async def user_metrics(self, update, context):
+        """
+        Handle user metrics request, calculating and displaying detailed metrics for the selected user.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         current_user = context.user_data.get('current_user', 'Unknown')
         current_user_id = context.user_data.get('current_user_id', None)
         
@@ -426,6 +498,13 @@ class Handler:
             )
 
     async def back_to_workers_menu(self, update, context):
+        """
+        Handle returning to the workers menu with pagination.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+        """
         logger.info("Back to workers menu")
         page = context.user_data.get('page', 1)
         reply_markup = await get_workers_menu(self.gitlab_service, page)

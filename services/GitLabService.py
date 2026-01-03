@@ -16,12 +16,21 @@ class GitLabService:
     _instance = None
     
     def __new__(cls):
+        """
+        Singleton implementation to ensure only one instance of GitLabService exists.
+        
+        Returns:
+            GitLabService: The single instance of the GitLabService class
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
+        """
+        Initialize the GitLabService instance with configuration and session.
+        """
         if not self._initialized:
             self.config = Config()
             self._session: Optional[aiohttp.ClientSession] = None
@@ -446,6 +455,16 @@ class GitLabService:
         return all_events
     
     async def get_task_metrics(self, task: Dict,username:str) -> Dict:
+        """
+        Get metrics for a specific task by collecting relevant history and calculating metrics.
+        
+        Args:
+            task: The task dictionary containing task details
+            username: The username for which to calculate metrics
+            
+        Returns:
+            Dict: A dictionary containing the task metrics
+        """
         task_metrics = {}
         task_metrics['task_id'] = task.get('id')
         task_metrics['task_iid'] = task.get('iid')
