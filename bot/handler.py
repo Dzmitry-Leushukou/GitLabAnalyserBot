@@ -163,7 +163,6 @@ class Handler:
         async def update_status(text: str, percent: int = None):
             """Callback for updating status in Telegram."""
             try:
-                
                 if percent is None:
                     await status_msg.edit_text(text)
                 elif percent == -1:  # Error
@@ -194,9 +193,14 @@ class Handler:
                 )
                 return
             
+            # Calculate summary metrics from already calculated task metrics
+            total_cicle_time = 0
+            total_review_time = 0
+            total_qa_time = 0
+            tasks_with_metrics = 0
             
             # Create JSON report   
-            await update_status("📊Generating report...",0)
+            await update_status("📊 Generating report...", 0)
             json_output = {
                 'user': {
                     'username': current_user,
@@ -204,67 +208,120 @@ class Handler:
                 },
                 'report_date': datetime.now().isoformat(),
                 'summary': {
-                    'total_tasks_found': len(tasks)
+                    'total_tasks_found': len(tasks),
+                    'total_cicle_time_hours': 0,
+                    'total_review_time_hours': 0,
+                    'total_qa_time_hours': 0,
+                    'tasks_with_metrics': 0
                 }
             }
             
             # Prepare data for JSON
-            notes = []
-            json_output['tasks'] = []  # Initialize tasks array
+            json_output['tasks'] = []
 
-            for index,task in enumerate(tasks):
+            for index, task in enumerate(tasks):
+                # Extract base task data
                 task_data = {
                     'project_id': task.get('project_id'),
                     'task_id': task.get('iid'),
                     'title': task.get('title'),
-                    'description' : task.get('description'),
+                    'description': task.get('description'),
                     'state': task.get('state', '').upper(),
                     'created_at': task.get('created_at'),
                     'updated_at': task.get('updated_at'),
+                    'closed_at': task.get('closed_at') or "",
                     'web_url': task.get('web_url'),
                     'labels': task.get('labels', []),
-                    'history': task.get('history', []),
-                    'labels_history': task.get('labels_history', []),
                     'merged_history': task.get('merged_history', [])
-                    
                 }
+                
+                # Add already calculated metrics from GitLabService
+                if 'cicle_time' in task:
+                    task_data['metrics'] = {
+                        'cicle_time': task.get('cicle_time', 0),
+                        'cicle_history': task.get('cicle_history', []),
+                        'review_time': task.get('review_time', 0),
+                        'review_history': task.get('review_history', []),
+                        'qa_time': task.get('qa_time', 0),
+                        'qa_history': task.get('qa_history', [])
+                    }
+                    
+                    # Add formatted time for readability
+                    task_data['metrics_formatted'] = {
+                        'cicle_time_hours': round(task.get('cicle_time', 0) / 3600, 2),
+                        'review_time_hours': round(task.get('review_time', 0) / 3600, 2),
+                        'qa_time_hours': round(task.get('qa_time', 0) / 3600, 2)
+                    }
+                    
+                    # Update summary totals
+                    total_cicle_time += task.get('cicle_time', 0)
+                    total_review_time += task.get('review_time', 0)
+                    total_qa_time += task.get('qa_time', 0)
+                    tasks_with_metrics += 1
                 
                 if 'error' in task:
                     task_data['error'] = task['error']
                 
                 json_output['tasks'].append(task_data)
-                if (index%5==0):
-                    await update_status("📊Generating report...",((index+1)/len(tasks))*100)
+                
+                # Update progress every 5 tasks
+                if index % 5 == 0:
+                    progress = ((index + 1) / len(tasks)) * 100
+                    await update_status("📊 Generating report with metrics...", progress)
             
+            # Update summary with calculated totals
+            json_output['summary'].update({
+                'total_cicle_time_hours': round(total_cicle_time / 3600, 2),
+                'total_review_time_hours': round(total_review_time / 3600, 2),
+                'total_qa_time_hours': round(total_qa_time / 3600, 2),
+                'tasks_with_metrics': tasks_with_metrics
+            })
             
             # Generate file
+            await update_status("📊 Finalizing report...", 95)
             json_content = json.dumps(json_output, indent=2, ensure_ascii=False)
             json_bytes = io.BytesIO(json_content.encode('utf-8'))
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             json_filename = f"{current_user}_metrics_{timestamp}.json"
-            await update_status("📊Generating report...",100)
+            
+            await update_status("📊 Report generated!", 100)
+            
             # Send file
             await update.message.reply_document(
                 document=InputFile(json_bytes, filename=json_filename),
-                caption=f"⏱️ User Report\n👤 {current_user}\n📊 {len(tasks)} tasks",
+                caption=(
+                    f"⏱️ User Report\n"
+                    f"👤 {current_user}\n"
+                    f"📊 {len(tasks)} tasks\n"
+                    f"⏰ Total in work: {round(total_cicle_time / 3600, 2)}h\n"
+                    f"👁️ Total in review: {round(total_review_time / 3600, 2)}h\n"
+                    f"🧪 Total in QA: {round(total_qa_time / 3600, 2)}h"
+                ),
                 reply_markup=get_user_detail_menu()
             )
             
             # Final message
             await status_msg.edit_text(
-                text=f"✅ Report ready!\n\n"
+                text=(
+                    f"✅ Report ready!\n\n"
                     f"👤 User: {current_user}\n"
-                    f"📁 File: {json_filename}"
+                    f"📁 File: {json_filename}\n"
+                    f"📈 Total tasks analyzed: {len(tasks)}\n"
+                    f"⏱️ Total time metrics calculated for: {tasks_with_metrics} tasks\n"
+                    f"⏰ Total in work: {round(total_cicle_time / 3600, 2)}h\n"
+                    f"👁️ Total in review: {round(total_review_time / 3600, 2)}h\n"
+                    f"🧪 Total in QA: {round(total_qa_time / 3600, 2)}h"
+                )
             )
             return
-           
+            
         except Exception as e:
-            logger.error(f"Error in metrics: {e}")
+            logger.error(f"Error in user_metrics: {e}", exc_info=True)
             await status_msg.edit_text(
                 text=f"❌ An error occurred:\n{str(e)[:200]}"
             )
- 
+
     async def back_to_workers_menu(self, update, context):
         logger.info("Back to workers menu")
         page = context.user_data.get('page', 1)

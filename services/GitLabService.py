@@ -5,6 +5,7 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import re
 from collections import defaultdict
+from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -454,21 +455,37 @@ class GitLabService:
         task_metrics['created_at'] = task.get('created_at')
         task_metrics['updated_at'] = task.get('updated_at')
         task_metrics['closed_at'] = task.get('closed_at') or ""
+
         history=await self.get_task_notes(task.get('project_id'), task.get('iid'),params={'activity_filter': 'only_activity'})
-        task_metrics['history']=history
-
         labels_history=await self.get_resource_label_events(task.get('project_id'), task.get('iid'))
-        task_metrics['labels_history']=labels_history
 
-        task_metrics=await self.caclulate_metrics(history,labels_history,username,task_metrics)
+        #task_metrics['history']=history
+        #task_metrics['labels_history']=labels_history
+        task_metrics=await self.calculate_metrics(history,labels_history,username,task_metrics)
         return task_metrics
 
-    async def caclulate_metrics(self, history: List[Dict],labels_history: List[Dict],username:str,task_metrics: Dict):
+    async def calculate_metrics(self, history: List[Dict], labels_history: List[Dict], username: str, task_metrics: Dict):
+        """
+        Calculate task metrics for a specific user based on activity history and label changes.
+        
+        Args:
+            history: List of system events (comments, assignments, etc.)
+            labels_history: List of label change events
+            username: Target username for metric calculation
+            task_metrics: Dictionary to store calculated metrics
+        
+        Returns:
+            Updated task_metrics dictionary with calculated metrics
+        """
+        # Merge and sort both event lists by creation time
         sorted_history = sorted(history, key=lambda x: x['created_at'])
         sorted_labels_history = sorted(labels_history, key=lambda x: x['created_at'])
+        
         sh_index = 0
         lh_index = 0
         merged_history = []
+        
+        # Merge sorted lists while preserving chronological order
         while sh_index < len(sorted_history) and lh_index < len(sorted_labels_history):
             if sorted_history[sh_index]['created_at'] < sorted_labels_history[lh_index]['created_at']:
                 merged_history.append(sorted_history[sh_index])
@@ -476,54 +493,144 @@ class GitLabService:
             else:
                 merged_history.append(sorted_labels_history[lh_index])
                 lh_index += 1
-        task_metrics['merged_history']=merged_history
-        return task_metrics
+        
+        # Add remaining events from either list
+        while sh_index < len(sorted_history):
+            merged_history.append(sorted_history[sh_index])
+            sh_index += 1
+        
+        while lh_index < len(sorted_labels_history):
+            merged_history.append(sorted_labels_history[lh_index])
+            lh_index += 1
+        
+        task_metrics['merged_history'] = merged_history
+        
+        # Initialize tracking variables
         cur_assignee = None
         cur_label = None
+        label_start_time = None
+        current_time = datetime.now(timezone.utc)
+        
+        # Initialize metric containers
         cicle_history = []
         cicle_time = 0
-        review_time = 0
         review_history = []
-        qa_time = 0
+        review_time = 0
         qa_history = []
-        for event in merged_history:
+        qa_time = 0
+        
+        # Process each event in chronological order
+        for i, event in enumerate(merged_history):
+            # Parse datetime for time calculations
+            event_time = datetime.fromisoformat(event['created_at'].replace('Z', '+00:00'))
+            
+            # Track assignment changes
             if event.get('system') and event.get('body'):
                 body = event['body'].lower()
                 
-                if any(pattern in body for pattern in [
+                # Check if this event assigns the target user
+                patterns = [
                     f'assigned to @{username}',
                     f'assigned @{username}',
                     f'назначил @{username}',
                     f'назначил на @{username}',
                     f'reassigned to @{username}'
-                ]):
-                    cur_assignee=username
-                    
-                import re
-                assign_match = re.search(
-                    r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
-                    body
-                )
-                if assign_match and assign_match.group(2) == username:
-                    cur_assignee=username
+                ]
+                
+                if any(pattern in body for pattern in patterns):
+                    cur_assignee = username
                 else:
-                    cur_assignee=None
-            elif event['action'] == 'label':
-                cur_label = event['label']['name']
-                if cur_label == 'doing' and cur_assignee == username:
-                    cicle_history.append(event)
-                    cicle_time += event['duration']
-                elif cur_label == 'review' and cur_assignee == username:
-                    review_history.append(event)
-                    review_time += event['duration']
-                elif cur_label == 'qa' and cur_assignee == username:
-                    qa_history.append(event)
-                    qa_time += event['duration']
-    
+                    # Use regex for more robust pattern matching
+                    import re
+                    assign_match = re.search(
+                        r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
+                        body
+                    )
+                    if assign_match and assign_match.group(2) == username:
+                        cur_assignee = username
+                    # Check for unassignment
+                    elif f'unassigned @{username}' in body:
+                        cur_assignee = None
+            
+            # Track label changes
+            elif 'action' in event and 'label' in event:
+                label_name = event['label']['name']
+                action = event['action']
+                
+                # Handle label removal or change
+                if cur_label and cur_assignee == username:
+                    # Calculate duration for the previous label
+                    duration = (event_time - label_start_time).total_seconds()
+                    
+                    # Add to appropriate history and time accumulator
+                    if cur_label == 'doing':
+                        cicle_time += duration
+                        cicle_history.append({
+                            'start': label_start_time.isoformat(),
+                            'end': event_time.isoformat(),
+                            'duration': duration,
+                            'event': event
+                        })
+                    elif cur_label == 'review':
+                        review_time += duration
+                        review_history.append({
+                            'start': label_start_time.isoformat(),
+                            'end': event_time.isoformat(),
+                            'duration': duration,
+                            'event': event
+                        })
+                    elif cur_label == 'qa':
+                        qa_time += duration
+                        qa_history.append({
+                            'start': label_start_time.isoformat(),
+                            'end': event_time.isoformat(),
+                            'duration': duration,
+                            'event': event
+                        })
+                
+                # Update current label based on action
+                if action == 'add' and label_name in ['doing', 'review', 'qa']:
+                    cur_label = label_name
+                    label_start_time = event_time
+                elif action == 'remove' and label_name == cur_label:
+                    cur_label = None
+                    label_start_time = None
+        
+        # Handle case where label is still active after last event
+        if cur_label and cur_assignee == username and label_start_time:
+            duration = (current_time - label_start_time).total_seconds()
+            
+            if cur_label == 'doing':
+                cicle_time += duration
+                cicle_history.append({
+                    'start': label_start_time.isoformat(),
+                    'end': current_time.isoformat(),
+                    'duration': duration,
+                    'event': {'type': 'still_active', 'label': cur_label}
+                })
+            elif cur_label == 'review':
+                review_time += duration
+                review_history.append({
+                    'start': label_start_time.isoformat(),
+                    'end': current_time.isoformat(),
+                    'duration': duration,
+                    'event': {'type': 'still_active', 'label': cur_label}
+                })
+            elif cur_label == 'qa':
+                qa_time += duration
+                qa_history.append({
+                    'start': label_start_time.isoformat(),
+                    'end': current_time.isoformat(),
+                    'duration': duration,
+                    'event': {'type': 'still_active', 'label': cur_label}
+                })
+        
+        # Update task metrics with calculated values
         task_metrics['cicle_time'] = cicle_time
         task_metrics['cicle_history'] = cicle_history
         task_metrics['review_time'] = review_time
         task_metrics['review_history'] = review_history
         task_metrics['qa_time'] = qa_time
         task_metrics['qa_history'] = qa_history
+        
         return task_metrics
