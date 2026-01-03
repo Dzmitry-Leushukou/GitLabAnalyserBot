@@ -145,6 +145,86 @@ class Handler:
             reply_markup=get_user_detail_menu()
         )
 
+    @staticmethod
+    def format_duration(seconds: float) -> str:
+        """
+        Convert seconds to human-readable format (days, hours, minutes, seconds).
+        
+        Args:
+            seconds: Duration in seconds
+            
+        Returns:
+            Human-readable string (e.g., "2d 5h 30m 15s")
+        """
+        if not seconds or seconds <= 0:
+            return "0s"
+        
+        # Convert to integer seconds for cleaner output
+        total_seconds = int(round(seconds))
+        
+        # Calculate time components
+        days = total_seconds // (24 * 3600)
+        hours = (total_seconds % (24 * 3600)) // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        
+        # Build the formatted string
+        parts = []
+        if days > 0:
+            parts.append(f"{days}d")
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0:
+            parts.append(f"{minutes}m")
+        if seconds > 0 or not parts:  # Always show at least seconds if no other parts
+            parts.append(f"{seconds}s")
+        
+        return " ".join(parts)
+
+    @staticmethod
+    def format_duration_short(seconds: float) -> str:
+        """
+        Convert seconds to short human-readable format (prioritizing largest units).
+        
+        Args:
+            seconds: Duration in seconds
+            
+        Returns:
+            Short human-readable string (e.g., "2.5h", "45m", "1d 3h")
+        """
+        if not seconds or seconds <= 0:
+            return "0s"
+        
+        total_seconds = int(round(seconds))
+        
+        # Calculate time components
+        days = total_seconds // (24 * 3600)
+        hours = (total_seconds % (24 * 3600)) // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        
+        # For short format, prioritize showing 1-2 most significant units
+        if days > 0:
+            # Show days and possibly hours
+            if hours > 0:
+                return f"{days}d {hours}h"
+            return f"{days}d"
+        elif hours > 0:
+            # Show hours and possibly minutes
+            remaining_minutes = minutes + (seconds / 60)
+            if remaining_minutes >= 30:
+                return f"{hours + 0.5:.1f}h"  # Show half hours
+            elif minutes > 0:
+                return f"{hours}h {minutes}m"
+            return f"{hours}h"
+        elif minutes > 0:
+            # Show minutes and possibly seconds
+            if seconds > 0:
+                return f"{minutes}m {seconds}s"
+            return f"{minutes}m"
+        else:
+            return f"{seconds}s"
+
     async def user_metrics(self, update, context):
         current_user = context.user_data.get('current_user', 'Unknown')
         current_user_id = context.user_data.get('current_user_id', None)
@@ -209,6 +289,9 @@ class Handler:
                 'report_date': datetime.now().isoformat(),
                 'summary': {
                     'total_tasks_found': len(tasks),
+                    'total_cicle_time_seconds': 0,
+                    'total_review_time_seconds': 0,
+                    'total_qa_time_seconds': 0,
                     'total_cicle_time_hours': 0,
                     'total_review_time_hours': 0,
                     'total_qa_time_hours': 0,
@@ -237,26 +320,40 @@ class Handler:
                 
                 # Add already calculated metrics from GitLabService
                 if 'cicle_time' in task:
+                    cicle_time = task.get('cicle_time', 0)
+                    review_time = task.get('review_time', 0)
+                    qa_time = task.get('qa_time', 0)
+                    
                     task_data['metrics'] = {
-                        'cicle_time': task.get('cicle_time', 0),
+                        'cicle_time': cicle_time,
                         'cicle_history': task.get('cicle_history', []),
-                        'review_time': task.get('review_time', 0),
+                        'review_time': review_time,
                         'review_history': task.get('review_history', []),
-                        'qa_time': task.get('qa_time', 0),
+                        'qa_time': qa_time,
                         'qa_history': task.get('qa_history', [])
                     }
                     
-                    # Add formatted time for readability
+                    # Add human-readable formatted time
+                    task_data['metrics_human_readable'] = {
+                        'cicle_time': self.format_duration(cicle_time),
+                        'cicle_time_short': self.format_duration_short(cicle_time),
+                        'review_time': self.format_duration(review_time),
+                        'review_time_short': self.format_duration_short(review_time),
+                        'qa_time': self.format_duration(qa_time),
+                        'qa_time_short': self.format_duration_short(qa_time)
+                    }
+                    
+                    # Add formatted time in hours for readability
                     task_data['metrics_formatted'] = {
-                        'cicle_time_hours': round(task.get('cicle_time', 0) / 3600, 2),
-                        'review_time_hours': round(task.get('review_time', 0) / 3600, 2),
-                        'qa_time_hours': round(task.get('qa_time', 0) / 3600, 2)
+                        'cicle_time_hours': round(cicle_time / 3600, 2),
+                        'review_time_hours': round(review_time / 3600, 2),
+                        'qa_time_hours': round(qa_time / 3600, 2)
                     }
                     
                     # Update summary totals
-                    total_cicle_time += task.get('cicle_time', 0)
-                    total_review_time += task.get('review_time', 0)
-                    total_qa_time += task.get('qa_time', 0)
+                    total_cicle_time += cicle_time
+                    total_review_time += review_time
+                    total_qa_time += qa_time
                     tasks_with_metrics += 1
                 
                 if 'error' in task:
@@ -271,10 +368,19 @@ class Handler:
             
             # Update summary with calculated totals
             json_output['summary'].update({
+                'total_cicle_time_seconds': total_cicle_time,
+                'total_review_time_seconds': total_review_time,
+                'total_qa_time_seconds': total_qa_time,
                 'total_cicle_time_hours': round(total_cicle_time / 3600, 2),
                 'total_review_time_hours': round(total_review_time / 3600, 2),
                 'total_qa_time_hours': round(total_qa_time / 3600, 2),
-                'tasks_with_metrics': tasks_with_metrics
+                'tasks_with_metrics': tasks_with_metrics,
+                'total_time_human_readable': {
+                    'cicle_time': self.format_duration(total_cicle_time),
+                    'review_time': self.format_duration(total_review_time),
+                    'qa_time': self.format_duration(total_qa_time),
+                    'total_combined': self.format_duration(total_cicle_time + total_review_time + total_qa_time)
+                }
             })
             
             # Generate file
@@ -286,34 +392,31 @@ class Handler:
             json_filename = f"{current_user}_metrics_{timestamp}.json"
             
             await update_status("📊 Report generated!", 100)
-            
-            # Send file
+
+            total_combined = total_cicle_time + total_review_time + total_qa_time
+            caption = (
+                f"✅ Report ready!\n\n"
+                f"👤 User: {current_user}\n"
+                f"📈 Total tasks analyzed: {len(tasks)}\n"
+                f"⏱️ Tasks with metrics: {tasks_with_metrics}\n\n"
+                f"⏰ Time in work: {self.format_duration(total_cicle_time)} "
+                f"({round(total_cicle_time / 3600, 2)} hours)\n"
+                f"👁️ Time in review: {self.format_duration(total_review_time)} "
+                f"({round(total_review_time / 3600, 2)} hours)\n"
+                f"🧪 Time in QA: {self.format_duration(total_qa_time)} "
+                f"({round(total_qa_time / 3600, 2)} hours)\n\n"
+                f"📊 Total combined time: {self.format_duration(total_combined)} "
+                f"({round(total_combined / 3600, 2)} hours)\n\n"
+                f"📁 File: {json_filename}"
+            )
+
             await update.message.reply_document(
                 document=InputFile(json_bytes, filename=json_filename),
-                caption=(
-                    f"⏱️ User Report\n"
-                    f"👤 {current_user}\n"
-                    f"📊 {len(tasks)} tasks\n"
-                    f"⏰ Total in work: {round(total_cicle_time / 3600, 2)}h\n"
-                    f"👁️ Total in review: {round(total_review_time / 3600, 2)}h\n"
-                    f"🧪 Total in QA: {round(total_qa_time / 3600, 2)}h"
-                ),
+                caption=caption,
                 reply_markup=get_user_detail_menu()
             )
-            
-            # Final message
-            await status_msg.edit_text(
-                text=(
-                    f"✅ Report ready!\n\n"
-                    f"👤 User: {current_user}\n"
-                    f"📁 File: {json_filename}\n"
-                    f"📈 Total tasks analyzed: {len(tasks)}\n"
-                    f"⏱️ Total time metrics calculated for: {tasks_with_metrics} tasks\n"
-                    f"⏰ Total in work: {round(total_cicle_time / 3600, 2)}h\n"
-                    f"👁️ Total in review: {round(total_review_time / 3600, 2)}h\n"
-                    f"🧪 Total in QA: {round(total_qa_time / 3600, 2)}h"
-                )
-            )
+
+            await status_msg.delete()
             return
             
         except Exception as e:
