@@ -14,7 +14,9 @@ class Config:
             cls._instance.__gitlab_token = os.getenv("GITLAB_TOKEN")
             page_size_env = os.getenv("PAGE_SIZE")
             progress_step_env = os.getenv("PROGRESS_STEP")
-            
+            cls._instance.__llm_url = os.getenv("LLM_URL")
+            cls._instance.__llm_api_key = os.getenv("LLM_API_KEY")
+
             if not page_size_env or not progress_step_env:
                 raise ValueError("PAGE_SIZE or PROGRESS_STEP is not set")
             
@@ -46,3 +48,11 @@ class Config:
     @property
     def progress_step(self):
         return self.__progress_step
+    
+    @property
+    def llm_url(self):
+        return self.__llm_url
+    
+    @property
+    def llm_api_key(self):
+        return self.__llm_api_key

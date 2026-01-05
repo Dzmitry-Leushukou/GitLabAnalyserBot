@@ -653,3 +653,70 @@ class GitLabService:
         task_metrics['qa_history'] = qa_history
         
         return task_metrics
+    
+    async def get_all_users(self)-> List[Dict]:
+        try:
+            users = []
+            page=0
+            while True:
+                response = await self.get_users(page)
+                if response != []:
+                    users.extend(response)
+                    page += 1
+                else:
+                    break
+
+            return users
+        except Exception as e:
+            raise e
+        
+    async def create_new_task(self, project_id: int, task_name: str, task_description: str, assignee_id: int) -> Dict:
+        """Create a new task (issue) in GitLab project asynchronously."""
+        await self._ensure_session()
+        
+        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues"
+        
+        payload = {
+            'title': task_name,
+            'description': task_description,
+            'assignee_id': assignee_id
+        }
+        
+        try:
+            async with self._session.post(url, json=payload) as response:
+                response.raise_for_status()
+                return await response.json()
+        except aiohttp.ClientError as e:
+            logger.error(f"Error creating task: {e}")
+            raise e
+        except Exception as e:
+            logger.error(f"Unexpected error creating task: {e}")
+            raise e
+        
+    async def get_user_id_by_name(self, user_name: str) -> Optional[int]:
+        """Find GitLab user ID by name"""
+        await self._ensure_session()
+        
+        # URL for user search
+        url = f"{self.config.gitlab_url}/api/v4/users"
+        
+        # Encode name for search
+        search_query = user_name.replace(" ", "+")
+        url = f"{url}?search={search_query}"
+        
+        try:
+            async with self._session.get(url) as response:
+                response.raise_for_status()
+                users = await response.json()
+                
+                # Look for user by full name
+                for user in users:
+                    if user.get('name') == user_name:
+                        return user['id']
+                
+                # If not found, return None
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error searching for user {user_name}: {e}")
+            return None

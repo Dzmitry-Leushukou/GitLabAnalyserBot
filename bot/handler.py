@@ -8,6 +8,9 @@ import io
 import json
 from datetime import datetime
 from telegram import InputFile
+from services.LLMService import LLMService
+import aiohttp
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +47,7 @@ class Handler:
             self._initialized = True
             self.current_users = {}
             self.gitlab_service = gitlab_service
+            self.llm_service = LLMService()
     
     @staticmethod
     async def error_handler(update, context):
@@ -112,7 +116,7 @@ class Handler:
             case "Back to workers":
                 await self.back_to_workers_menu(update, context)
             case _:
-                await update.message.reply_text(text="Invalid option")
+                await self.create_task(update,context,text)
     
     async def workers_message(self, update, context):
         """
@@ -513,3 +517,125 @@ class Handler:
             reply_markup=reply_markup
         )
     
+    async def create_task(self, update, context, text):
+        """
+        Handle creating a task.
+        
+        Args:
+            update: The update object containing the message
+            context: The context object for the handler
+            text: The message text from user
+        """
+        logger.info(f"Creating task from message: {text}")
+        
+        status_msg = None
+        
+        try:
+            # Send initial status message
+            status_msg = await update.message.reply_text(
+                text="🔍 Analyzing task..."
+            )
+            
+            # Step 1: Get users from GitLab
+            await status_msg.edit_text(
+                text="🔍 Getting user list..."
+            )
+            
+            users = await self.gitlab_service.get_all_users()
+            if not users:
+                await status_msg.edit_text(
+                    text="❌ Failed to get user list from GitLab"
+                )
+                return
+                
+            user_names = [user['name'] for user in users]
+            user_name_to_id = {user['name']: user['id'] for user in users}
+            
+            # Step 2: Analyze with LLM
+            await status_msg.edit_text(
+                text="🤖 Analyzing task with AI..."
+            )
+            
+            structured_data = await self.llm_service.process_task_assignment(
+                workers=user_names,
+                user_message=text
+            )
+            
+            # Step 3: Prepare task data
+            await status_msg.edit_text(
+                text="⚙️ Preparing data for task creation..."
+            )
+            
+            # Get assignee_id
+            assignee_id = None
+            assignee_name = structured_data.get('assignee_name')
+            
+            if assignee_name:
+                assignee_id = user_name_to_id.get(assignee_name)
+                if not assignee_id:
+                    logger.warning(f"User '{assignee_name}' not found. Available: {list(user_name_to_id.keys())}")
+            
+            # Convert project_id
+            project_id_str = structured_data.get('project_id', '18')
+            try:
+                project_id = int(project_id_str)
+            except ValueError:
+                logger.warning(f"Invalid project_id '{project_id_str}', using default 18")
+                project_id = 18
+            
+            # Step 4: Create task in GitLab
+            await status_msg.edit_text(
+                text="🚀 Creating task in GitLab..."
+            )
+            
+            task = await self.gitlab_service.create_new_task(
+                project_id=project_id,
+                task_name=structured_data.get('title', 'New task'),
+                task_description=structured_data.get('description', ''),
+                assignee_id=assignee_id
+            )
+            
+            # Step 5: Send success message
+            task_url = task.get('web_url', '#')
+            task_iid = task.get('iid', '?')
+            task_title = task.get('title', 'New task')
+            
+            success_text = (
+                f"✅ *Task created successfully!*\n\n"
+                f"*Task:* #{task_iid} {task_title}\n"
+                f"*Project:* {project_id}\n"
+            )
+            
+            if assignee_name:
+                if assignee_id:
+                    success_text += f"*Assignee:* {assignee_name}\n"
+                else:
+                    success_text += f"*Assignee:* {assignee_name} (not assigned)\n"
+            
+            success_text += f"\n[🔗 Open task]({task_url})"
+            
+            await status_msg.edit_text(
+                text=success_text,
+                parse_mode='Markdown',
+                disable_web_page_preview=True
+            )
+            
+            logger.info(f"Task created successfully: {task.get('web_url')}")
+            
+        except Exception as e:
+            logger.error(f"Error creating task: {e}", exc_info=True)
+            
+            if status_msg:
+                error_message = "❌ *Task creation error*\n\n"
+                
+                if isinstance(e, json.JSONDecodeError):
+                    error_message += "AI could not properly analyze the task. Try to formulate differently."
+                elif isinstance(e, aiohttp.ClientError):
+                    error_message += "Connection problem with services. Try again later."
+                else:
+                    error_message += f"An error occurred: {str(e)}"
+                
+                await status_msg.edit_text(
+                    text=error_message,
+                    parse_mode='Markdown'
+                )

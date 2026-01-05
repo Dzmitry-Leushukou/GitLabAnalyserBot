@@ -20,7 +20,7 @@ A Telegram bot that integrates with GitLab API to provide user information and a
 
 ## Overview
 
-This project is a Telegram bot that connects to a GitLab instance and allows users to browse GitLab users through a simple chat interface. The bot provides pagination functionality to navigate through users and displays user information in a clean, organized manner. Additionally, it can analyze task assignments, calculate time metrics for different development stages, and generate detailed reports about user activities in GitLab.
+This project is a Telegram bot that connects to a GitLab instance and allows users to browse GitLab users through a simple chat interface. The bot provides pagination functionality to navigate through users and displays user information in a clean, organized manner. Additionally, it can analyze task assignments, calculate time metrics for different development stages, and generate detailed reports about user activities in GitLab. The bot also features AI-powered task assignment based on natural language processing.
 
 ## Features
 
@@ -35,12 +35,15 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 - **Export Functionality**: Export user tasks with detailed information to JSON files
 - **Configuration**: Environment-based configuration for easy setup
 - **Progress Tracking**: Real-time progress updates during data fetching operations
+- **AI Task Assignment**: Natural language processing for intelligent task assignment
+- **LLM Integration**: Connects to external LLM services for advanced task analysis
 
 ## Prerequisites
 
 - Python 3.8 or higher
 - GitLab instance with API access
 - Telegram Bot Token
+- LLM service endpoint (optional, for AI features)
 
 ## Installation
 
@@ -75,6 +78,10 @@ TELEGRAM_TOKEN=your-telegram-bot-token
 # GitLab Configuration
 GITLAB_URL=your-gitlab-instance-url
 GITLAB_TOKEN=your-gitlab-api-token
+
+# LLM Service Configuration (optional)
+LLM_URL=your-llm-service-url
+LLM_API_KEY=your-llm-api-key
 ```
 
 ### Configuration Details
@@ -84,6 +91,8 @@ GITLAB_TOKEN=your-gitlab-api-token
 - `TELEGRAM_TOKEN`: Your Telegram bot token (obtained from @BotFather)
 - `GITLAB_URL`: URL of your GitLab instance (e.g., https://gitlab.com)
 - `GITLAB_TOKEN`: GitLab personal access token with appropriate permissions
+- `LLM_URL`: URL of your LLM service endpoint (optional, for AI features)
+- `LLM_API_KEY`: API key for your LLM service (optional, for AI features)
 
 ## Usage
 
@@ -106,6 +115,7 @@ After selecting a user, you can access additional functionality:
 - **Task History**: View comprehensive history of label changes and assignee changes for each task
 - **Time Metrics**: Calculate and view time spent in different development stages (work, review, QA)
 - **Export Data**: Export user tasks with detailed information and metrics to JSON files
+- **AI Task Creation**: Send natural language messages to create GitLab tasks automatically assigned to appropriate users
 
 
 
@@ -124,6 +134,7 @@ The bot allows users to interact with GitLab user data:
 - **Task Information**: Detailed information about each task including title, state, creation/update dates, labels, author, assignee, and label change history
 - **Time Metrics**: Calculate and display time spent in different development stages (work, review, QA)
 - **Export**: Export user tasks with detailed information and metrics to a JSON file
+- **AI Task Creation**: Send natural language messages to create GitLab tasks automatically assigned to appropriate users
 
 
 ### Navigation Controls
@@ -148,11 +159,14 @@ GitLabAnalytics/
 │       ├── __init__.py
 │       ├── start_menu.py
 │       ├── main_menu.py
+│       ├── workers_menu.py
+│       ├── worker_menu.py
 │       └── workers_menu.py
 └── services/            # External service integrations
     ├── __init__.py      # Package initialization
     ├── config.py        # Service configuration
-    └── GitLabService.py # GitLab API integration
+    ├── GitLabService.py # GitLab API integration
+    └── LLMService.py    # LLM service integration
 ```
 ## Dependencies
 
