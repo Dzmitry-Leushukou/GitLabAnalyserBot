@@ -739,13 +739,13 @@ class GitLabService:
         #task_metrics['labels_history']=labels_history
         task_metrics=await self.calculate_metrics(history,labels_history,username,task_metrics)
         return task_metrics
-
-    async def calculate_metrics(self, history: List[Dict], labels_history: List[Dict], username: str, task_metrics: Dict):
+    
+    async def calculate_metrics(self, history: List[Dict], labels_history: List[Dict], username: str, task_metrics: Dict) -> Dict:
         """
         Calculate task metrics for a specific user based on activity history and label changes.
         
         This method analyzes the history of a task to calculate time spent in different
-        development stages (work, review, QA) for a specific user.
+        development stages (work, review, QA) for a specific user, considering task state.
         
         Args:
             history: List of system events (comments, assignments, etc.)
@@ -755,12 +755,6 @@ class GitLabService:
         
         Returns:
             Updated task_metrics dictionary with calculated metrics
-            
-        Example:
-            >>> history = [{"created_at": "2023-01-01T00:00:00Z", "body": "assigned to @john"}]
-            >>> labels = [{"created_at": "2023-01-01T00:00:00Z", "action": "add", "label": {"name": "doing"}}]
-            >>> metrics = {}
-            >>> updated_metrics = await calculate_metrics(history, labels, "john", metrics)
         """
         # Merge and sort both event lists by creation time
         sorted_history = sorted(history, key=lambda x: x['created_at'])
@@ -790,31 +784,68 @@ class GitLabService:
         
         task_metrics['merged_history'] = merged_history
         
+        # Get task state information
+        task_created_at = datetime.fromisoformat(task_metrics['created_at'].replace('Z', '+00:00'))
+        task_closed_at = None
+        if task_metrics.get('closed_at'):
+            task_closed_at = datetime.fromisoformat(task_metrics['closed_at'].replace('Z', '+00:00'))
+        
         # Initialize tracking variables
         cur_assignee = None
         cur_label = None
         label_start_time = None
         current_time = datetime.now(timezone.utc)
         
-        # Initialize metric containers
-        cicle_history = []
-        cicle_time = 0
-        review_history = []
-        review_time = 0
-        qa_history = []
-        qa_time = 0
+        # Track state changes from history
+        state_changes = []
         
-        # Process each event in chronological order
-        for i, event in enumerate(merged_history):
-            # Parse datetime for time calculations
+        # Find state changes in history (close/reopen events)
+        for event in merged_history:
+            if event.get('system') and event.get('body'):
+                body = event['body'].lower()
+                event_time = datetime.fromisoformat(event['created_at'].replace('Z', '+00:00'))
+                
+                # Check for close events
+                if 'closed' in body or 'закрыт' in body or 'closed issue' in body:
+                    # Make sure it's not about merging or other actions
+                    if not any(word in body for word in ['merged', 'мердж', 'accept', 'принят']):
+                        state_changes.append(('closed', event_time))
+                
+                # Check for reopen events
+                elif 'reopened' in body or 'повторно открыт' in body or 'reopened issue' in body:
+                    state_changes.append(('opened', event_time))
+        
+        # Sort state changes chronologically
+        state_changes.sort(key=lambda x: x[1])
+        
+        # Create list of open/closed periods
+        state_periods = []
+        current_state = 'opened'
+        last_state_change = task_created_at
+        
+        for state, change_time in state_changes:
+            state_periods.append((current_state, last_state_change, change_time))
+            current_state = state
+            last_state_change = change_time
+        
+        # Add final period
+        end_time = task_closed_at if task_closed_at else current_time
+        state_periods.append((current_state, last_state_change, end_time))
+        
+        # Create a list of assignment periods for the target user
+        assignment_periods = []
+        assignment_start = None
+        
+        # Extract all assignment periods for the target user
+        for event in merged_history:
             event_time = datetime.fromisoformat(event['created_at'].replace('Z', '+00:00'))
             
-            # Track assignment changes
+            # Check for assignment events
             if event.get('system') and event.get('body'):
                 body = event['body'].lower()
                 
                 # Check if this event assigns the target user
-                patterns = [
+                assign_patterns = [
                     f'assigned to @{username}',
                     f'assigned @{username}',
                     f'назначил @{username}',
@@ -822,93 +853,276 @@ class GitLabService:
                     f'reassigned to @{username}'
                 ]
                 
-                if any(pattern in body for pattern in patterns):
-                    cur_assignee = username
-                else:
-                    # Use regex for more robust pattern matching
-                    import re
+                is_assigned = False
+                is_unassigned = False
+                
+                # Check assignment patterns
+                for pattern in assign_patterns:
+                    if pattern in body:
+                        is_assigned = True
+                        break
+                
+                # Check unassignment
+                if f'unassigned @{username}' in body:
+                    is_unassigned = True
+                
+                # Use regex for more robust pattern matching
+                if not is_assigned and not is_unassigned:
                     assign_match = re.search(
                         r'(assigned to|назначил|reassigned to)[\s:]+@?([a-zA-Z0-9_.-]+)',
                         body
                     )
                     if assign_match and assign_match.group(2) == username:
-                        cur_assignee = username
-                    # Check for unassignment
-                    elif f'unassigned @{username}' in body:
-                        cur_assignee = None
+                        is_assigned = True
+                
+                # Handle assignment start
+                if is_assigned and assignment_start is None:
+                    assignment_start = event_time
+                
+                # Handle assignment end
+                elif is_unassigned and assignment_start is not None:
+                    assignment_periods.append((assignment_start, event_time))
+                    assignment_start = None
+        
+        # If assignment is still active at the end
+        if assignment_start is not None:
+            assignment_periods.append((assignment_start, end_time))
+        
+        # Helper function to check if a time point is within an open period
+        def get_active_state_period(check_time):
+            """Return the state period that contains the check_time."""
+            for state, period_start, period_end in state_periods:
+                if period_start <= check_time <= period_end:
+                    return (state, period_start, period_end)
+            return None
+        
+        # Helper function to get the next state change after a given time
+        def get_next_state_change(check_time):
+            """Return the next state change time after check_time."""
+            for _, period_start, period_end in state_periods:
+                if period_start > check_time:
+                    return period_start
+            return end_time
+        
+        # Helper function to check if time is in any assignment period
+        def is_in_assignment_period(check_time):
+            """Check if time is within any assignment period."""
+            for period_start, period_end in assignment_periods:
+                if period_start <= check_time <= period_end:
+                    return True
+            return False
+        
+        # Helper function to get current assignment period end
+        def get_assignment_period_end(check_time):
+            """Get the end of assignment period containing check_time."""
+            for period_start, period_end in assignment_periods:
+                if period_start <= check_time <= period_end:
+                    return period_end
+            return None
+        
+        # Now calculate time for each label only during assignment AND open periods
+        cicle_time = 0
+        cicle_history = []
+        review_time = 0
+        review_history = []
+        qa_time = 0
+        qa_history = []
+        
+        for event in merged_history:
+            event_time = datetime.fromisoformat(event['created_at'].replace('Z', '+00:00'))
+            
+            # Check if this event happens during any assignment period
+            in_assignment_period = is_in_assignment_period(event_time)
+            
+            # Get current state period
+            state_period = get_active_state_period(event_time)
+            if not state_period:
+                continue
+                
+            current_state, state_start, state_end = state_period
+            
+            # Only process if in assignment period AND task is open
+            if not in_assignment_period or current_state != 'opened':
+                # If we were tracking a label, but now we're not in assignment or task is closed,
+                # we need to close the current label period
+                if cur_label and label_start_time:
+                    # Find the earliest end: assignment end, state change to closed, or current time
+                    possible_ends = []
+                    
+                    # Check assignment end
+                    assignment_end = get_assignment_period_end(label_start_time)
+                    if assignment_end:
+                        possible_ends.append(assignment_end)
+                    
+                    # Check state change to closed
+                    if current_state == 'closed':
+                        possible_ends.append(state_start)  # When it changed to closed
+                    
+                    # Add event time as potential end
+                    possible_ends.append(event_time)
+                    
+                    # Use the earliest end
+                    if possible_ends:
+                        end_time_for_label = min(possible_ends)
+                        
+                        if end_time_for_label > label_start_time:
+                            duration = (end_time_for_label - label_start_time).total_seconds()
+                            
+                            # Add to appropriate history and time accumulator
+                            if cur_label == 'doing':
+                                cicle_time += duration
+                                cicle_history.append({
+                                    'start': label_start_time.isoformat(),
+                                    'end': end_time_for_label.isoformat(),
+                                    'duration': duration,
+                                    'event': {'type': 'interrupted', 'reason': 'not_assigned_or_closed'}
+                                })
+                            elif cur_label == 'review':
+                                review_time += duration
+                                review_history.append({
+                                    'start': label_start_time.isoformat(),
+                                    'end': end_time_for_label.isoformat(),
+                                    'duration': duration,
+                                    'event': {'type': 'interrupted', 'reason': 'not_assigned_or_closed'}
+                                })
+                            elif cur_label == 'qa':
+                                qa_time += duration
+                                qa_history.append({
+                                    'start': label_start_time.isoformat(),
+                                    'end': end_time_for_label.isoformat(),
+                                    'duration': duration,
+                                    'event': {'type': 'interrupted', 'reason': 'not_assigned_or_closed'}
+                                })
+                    
+                    cur_label = None
+                    label_start_time = None
+                
+                continue
             
             # Track label changes
-            elif 'action' in event and 'label' in event:
+            if 'action' in event and 'label' in event:
                 label_name = event['label']['name']
                 action = event['action']
                 
+                # Only track specific labels
+                if label_name not in ['doing', 'review', 'qa']:
+                    continue
+                
                 # Handle label removal or change
-                if cur_label and cur_assignee == username:
+                if cur_label and label_start_time:
                     # Calculate duration for the previous label
-                    duration = (event_time - label_start_time).total_seconds()
+                    # Ensure we don't count time when task was closed
+                    actual_end_time = event_time
                     
-                    # Add to appropriate history and time accumulator
-                    if cur_label == 'doing':
-                        cicle_time += duration
-                        cicle_history.append({
-                            'start': label_start_time.isoformat(),
-                            'end': event_time.isoformat(),
-                            'duration': duration,
-                            'event': event
-                        })
-                    elif cur_label == 'review':
-                        review_time += duration
-                        review_history.append({
-                            'start': label_start_time.isoformat(),
-                            'end': event_time.isoformat(),
-                            'duration': duration,
-                            'event': event
-                        })
-                    elif cur_label == 'qa':
-                        qa_time += duration
-                        qa_history.append({
-                            'start': label_start_time.isoformat(),
-                            'end': event_time.isoformat(),
-                            'duration': duration,
-                            'event': event
-                        })
+                    # Check if task was closed during this label period
+                    state_period_at_start = get_active_state_period(label_start_time)
+                    if state_period_at_start and state_period_at_start[0] == 'opened':
+                        # Task was open when label started, check if it closed before event_time
+                        closed_periods = [(s, start, end) for s, start, end in state_periods 
+                                        if s == 'closed' and start > label_start_time and start < event_time]
+                        
+                        if closed_periods:
+                            # Task was closed during this period, only count time until closure
+                            first_closed_time = min([start for _, start, _ in closed_periods])
+                            actual_end_time = min(actual_end_time, first_closed_time)
+                    
+                    if actual_end_time > label_start_time:
+                        duration = (actual_end_time - label_start_time).total_seconds()
+                        
+                        # Add to appropriate history and time accumulator
+                        if cur_label == 'doing':
+                            cicle_time += duration
+                            cicle_history.append({
+                                'start': label_start_time.isoformat(),
+                                'end': actual_end_time.isoformat(),
+                                'duration': duration,
+                                'event': event
+                            })
+                        elif cur_label == 'review':
+                            review_time += duration
+                            review_history.append({
+                                'start': label_start_time.isoformat(),
+                                'end': actual_end_time.isoformat(),
+                                'duration': duration,
+                                'event': event
+                            })
+                        elif cur_label == 'qa':
+                            qa_time += duration
+                            qa_history.append({
+                                'start': label_start_time.isoformat(),
+                                'end': actual_end_time.isoformat(),
+                                'duration': duration,
+                                'event': event
+                            })
                 
                 # Update current label based on action
-                if action == 'add' and label_name in ['doing', 'review', 'qa']:
+                if action == 'add' and current_state == 'opened':
                     cur_label = label_name
                     label_start_time = event_time
                 elif action == 'remove' and label_name == cur_label:
                     cur_label = None
                     label_start_time = None
         
-        # Handle case where label is still active after last event
-        if cur_label and cur_assignee == username and label_start_time:
-            duration = (current_time - label_start_time).total_seconds()
+        # Handle case where label is still active at the end
+        if cur_label and label_start_time:
+            # Determine the actual end time considering task state and assignment
+            possible_ends = []
             
-            if cur_label == 'doing':
-                cicle_time += duration
-                cicle_history.append({
-                    'start': label_start_time.isoformat(),
-                    'end': current_time.isoformat(),
-                    'duration': duration,
-                    'event': {'type': 'still_active', 'label': cur_label}
-                })
-            elif cur_label == 'review':
-                review_time += duration
-                review_history.append({
-                    'start': label_start_time.isoformat(),
-                    'end': current_time.isoformat(),
-                    'duration': duration,
-                    'event': {'type': 'still_active', 'label': cur_label}
-                })
-            elif cur_label == 'qa':
-                qa_time += duration
-                qa_history.append({
-                    'start': label_start_time.isoformat(),
-                    'end': current_time.isoformat(),
-                    'duration': duration,
-                    'event': {'type': 'still_active', 'label': cur_label}
-                })
+            # Check assignment end
+            assignment_end = get_assignment_period_end(label_start_time)
+            if assignment_end:
+                possible_ends.append(assignment_end)
+            
+            # Check if/when task becomes closed after label start
+            for state, period_start, period_end in state_periods:
+                if period_start > label_start_time and state == 'closed':
+                    possible_ends.append(period_start)
+                    break
+            
+            # Add the final end time (task closed time or current time)
+            possible_ends.append(end_time)
+            
+            # Use the earliest end
+            actual_end_time = min(possible_ends) if possible_ends else end_time
+            
+            # Ensure we only count time when task was open
+            if actual_end_time > label_start_time:
+                # Check for closed periods within this label period
+                closed_periods = [(s, start, end) for s, start, end in state_periods 
+                                if s == 'closed' and start > label_start_time and start < actual_end_time]
+                
+                if closed_periods:
+                    # Only count time until first closure
+                    first_closed_time = min([start for _, start, _ in closed_periods])
+                    actual_end_time = min(actual_end_time, first_closed_time)
+                
+                if actual_end_time > label_start_time:
+                    duration = (actual_end_time - label_start_time).total_seconds()
+                    
+                    if cur_label == 'doing':
+                        cicle_time += duration
+                        cicle_history.append({
+                            'start': label_start_time.isoformat(),
+                            'end': actual_end_time.isoformat(),
+                            'duration': duration,
+                            'event': {'type': 'ended', 'label': cur_label}
+                        })
+                    elif cur_label == 'review':
+                        review_time += duration
+                        review_history.append({
+                            'start': label_start_time.isoformat(),
+                            'end': actual_end_time.isoformat(),
+                            'duration': duration,
+                            'event': {'type': 'ended', 'label': cur_label}
+                        })
+                    elif cur_label == 'qa':
+                        qa_time += duration
+                        qa_history.append({
+                            'start': label_start_time.isoformat(),
+                            'end': actual_end_time.isoformat(),
+                            'duration': duration,
+                            'event': {'type': 'ended', 'label': cur_label}
+                        })
         
         # Update task metrics with calculated values
         task_metrics['cicle_time'] = cicle_time
@@ -918,8 +1132,31 @@ class GitLabService:
         task_metrics['qa_time'] = qa_time
         task_metrics['qa_history'] = qa_history
         
+        # Add debug information
+        task_metrics['state_periods'] = [
+            (state, start.isoformat(), end.isoformat()) 
+            for state, start, end in state_periods
+        ]
+        
+        task_metrics['assignment_periods'] = [
+            (start.isoformat(), end.isoformat()) 
+            for start, end in assignment_periods
+        ]
+        
+        # Calculate total open time during assignments
+        total_open_assignment_time = 0
+        for assign_start, assign_end in assignment_periods:
+            for state, state_start, state_end in state_periods:
+                if state == 'opened':
+                    # Calculate overlap
+                    overlap_start = max(assign_start, state_start)
+                    overlap_end = min(assign_end, state_end)
+                    if overlap_start < overlap_end:
+                        total_open_assignment_time += (overlap_end - overlap_start).total_seconds()
+        
+        task_metrics['total_open_assignment_time'] = total_open_assignment_time
+        
         return task_metrics
-    
     async def get_all_users(self)-> List[Dict]:
         """
         Get all users from GitLab by iterating through all pages.
