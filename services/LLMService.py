@@ -9,38 +9,94 @@ from services.config import Config
 logger = logging.getLogger(__name__)
 
 class LLMService:
+    """
+    Service for interacting with Large Language Models (LLMs).
+    
+    This service handles communication with external LLM services to process
+    task assignments and label suggestions based on user input and available
+    worker information.
+    
+    Attributes:
+        _session (Optional[aiohttp.ClientSession]): HTTP session for API requests
+        config (Config): Configuration instance with API keys and settings
+        
+    Example:
+        >>> async with LLMService() as service:
+        ...     result = await service.process_task_assignment(
+        ...         ["John Doe", "Jane Smith"],
+        ...         "Create a login page"
+        ...     )
+        ...     print(result)
+    """
     _instance = None
     
     def __new__(cls):
+        """
+        Create or return the singleton instance of the LLMService class.
+        
+        This method ensures that only one instance of the LLMService class exists
+        throughout the application lifecycle.
+        
+        Returns:
+            LLMService: The singleton instance of the LLMService class
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
+        """
+        Initialize the LLMService instance with configuration and session.
+        """
         if not self._initialized:
             self.config = Config()
             self._session: Optional[aiohttp.ClientSession] = None
             self._initialized = True
     
     async def __aenter__(self):
+        """
+        Context manager entry method.
+        
+        Returns:
+            LLMService: The current instance
+        """
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit method that closes the session.
+        """
         await self.close()
     
     async def _ensure_session(self) -> None:
+        """
+        Ensure the aiohttp session is initialized and ready for use.
+        
+        Creates a new session if none exists or if the current session is closed.
+        """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 headers={'Content-Type': 'application/json'}
             )
     
     async def close(self) -> None:
+        """
+        Close the aiohttp session and clean up resources.
+        """
         if self._session and not self._session.closed:
             await self._session.close()
     
     async def _extract_json_from_response(self, response_text: str) -> str:
-        """Extract JSON from response text, removing markdown code block."""
+        """
+        Extract JSON from response text, removing markdown code block formatting.
+        
+        Args:
+            response_text: The raw response text that may contain markdown formatting
+            
+        Returns:
+            str: Clean JSON string extracted from the response
+        """
         response_text = response_text.strip()
         
         # Remove backticks and json label if present
@@ -55,7 +111,18 @@ class LLMService:
         return response_text.strip()
     
     async def _validate_json_structure(self, data: Dict) -> Dict:
-        """Validate JSON structure and convert types."""
+        """
+        Validate JSON structure and convert types as needed.
+        
+        Args:
+            data: The parsed JSON data to validate
+            
+        Returns:
+            Dict: The validated and potentially modified data
+            
+        Raises:
+            ValueError: If required fields are missing or types are incorrect
+        """
         required_fields = ["project_id", "title", "description", "assignee_name"]
         
         for field in required_fields:
@@ -81,14 +148,28 @@ class LLMService:
         return data
     
     async def send_chat_request(self, api_key, message: str, chat_id: Optional[str] = None) -> Dict:
-        """Send request to server endpoint /chat.
+        """
+        Send request to server endpoint /chat.
+        
+        This method sends a message to the configured LLM service endpoint
+        and returns the response.
         
         Args:
-            message: Message to process
-            chat_id: Chat identifier (optional)
+            api_key: The API key for authentication with the LLM service
+            message: The message content to process
+            chat_id: Optional chat identifier (not currently used)
         
         Returns:
             Response from server in ChatResponse format
+            
+        Raises:
+            aiohttp.ClientError: HTTP request error
+            json.JSONDecodeError: Invalid JSON in server response
+            
+        Example:
+            >>> async with LLMService() as service:
+            ...     response = await service.send_chat_request("my-api-key", "Hello, world!")
+            ...     print(response.get('answer'))
         """
         await self._ensure_session()
         
@@ -114,28 +195,41 @@ class LLMService:
                 
             logger.info(f"Received response from server, status: {response_data.get('status')}")
             return response_data
-            
+             
         except aiohttp.ClientError as e:
             logger.error(f"HTTP error when sending message: {e}")
             raise
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in server response: {e}")
             raise
-    
+     
     async def process_task_assignment(self, workers: List[str], user_message: str) -> Dict[str, str]:
-        """Process assignment and return structured data.
+        """
+        Process assignment and return structured data.
+        
+        This method takes a list of workers and a user message, formats them
+        appropriately, and sends them to the LLM service to determine task
+        assignment details.
         
         Args:
             workers: List of workers in format ["First Last", ...]
-            user_message: User message text
-        
+            user_message: User message text describing the task
+            
         Returns:
             Dictionary with fields: project_id, title, description, assignee_name
-        
+            
         Raises:
             aiohttp.ClientError: HTTP request error
             json.JSONDecodeError: Invalid JSON in response
             ValueError: Invalid JSON structure or missing required fields
+            
+        Example:
+            >>> async with LLMService() as service:
+            ...     result = await service.process_task_assignment(
+            ...         ["John Doe", "Jane Smith"],
+            ...         "Create a new login page"
+            ...     )
+            ...     print(f"Assigned to: {result['assignee_name']}")
         """
         # Form message for LLM according to prompt
         workers_str = json.dumps(workers, ensure_ascii=False)
@@ -200,22 +294,27 @@ class LLMService:
         except aiohttp.ClientError as e:
             logger.error(f"HTTP error when sending message: {e}")
             raise
-    
+     
     async def set_labels(self, labels: List[Dict[str, str]], user_message:str)-> Dict[str, str]:
-        """Set labels for current task.
+        """
+        Set appropriate labels for a task based on user message and available labels.
+        
+        This method analyzes the user's message and suggests appropriate labels
+        from the provided list of available labels.
         
         Args:
             labels: List of label dictionaries with name and description
-        
+            user_message: The user's message describing the task
+            
         Returns:
-            Dictionary with fields: project_id, title, description, assignee_name
-        
+            Dictionary containing the selected labels
+            
         Raises:
             aiohttp.ClientError: HTTP request error
             json.JSONDecodeError: Invalid JSON in response
             ValueError: Invalid JSON structure or missing required fields
         """
-        # Формируем строку с метками для LLM
+        # Formulate a string with labels for the LLM
         labels_info_str = ""
         for label in labels:
             name = label.get('name', '')

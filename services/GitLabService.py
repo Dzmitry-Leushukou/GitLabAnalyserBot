@@ -14,14 +14,38 @@ logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler())
 
 class GitLabService:
+    """
+    Service for interacting with GitLab API to retrieve user information, tasks, and metrics.
+    
+    This service handles communication with GitLab API to fetch user data, tasks, and calculate
+    metrics based on label changes and assignments. It implements singleton pattern to ensure
+    only one instance exists throughout the application.
+    
+    Attributes:
+        _session (Optional[aiohttp.ClientSession]): HTTP session for API requests
+        config (Config): Configuration instance with GitLab URL and token
+        
+    Example:
+        >>> async with GitLabService() as service:
+        ...     users = await service.get_users(1)
+        ...     print(f"Retrieved {len(users)} users")
+    """
     _instance = None
     
     def __new__(cls):
         """
-        Singleton implementation to ensure only one instance of GitLabService exists.
+        Create or return the singleton instance of the GitLabService class.
+        
+        This method ensures that only one instance of the GitLabService class exists
+        throughout the application lifecycle.
         
         Returns:
             GitLabService: The single instance of the GitLabService class
+            
+        Example:
+            >>> service1 = GitLabService()
+            >>> service2 = GitLabService()
+            >>> assert service1 is service2  # Both refer to the same instance
         """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -31,6 +55,10 @@ class GitLabService:
     def __init__(self):
         """
         Initialize the GitLabService instance with configuration and session.
+        
+        Note:
+            This method is part of the singleton pattern implementation and
+            should not be called directly. Use the class constructor instead.
         """
         if not self._initialized:
             self.config = Config()
@@ -38,25 +66,92 @@ class GitLabService:
             self._initialized = True
     
     async def __aenter__(self):
+        """
+        Context manager entry method.
+        
+        This method allows the GitLabService to be used in an async context manager.
+        
+        Returns:
+            GitLabService: The current instance
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     users = await service.get_users(1)
+        """
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit method that closes the session.
+        
+        This method ensures proper cleanup when exiting the context manager.
+        
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
         await self.close()
     
     async def _ensure_session(self) -> None:
-        """Ensure aiohttp session is initialized."""
+        """
+        Ensure aiohttp session is initialized and authenticated.
+        
+        Creates a new session if none exists or if the current session is closed.
+        The session includes authorization header with the GitLab token.
+        
+        Note:
+            This is an internal method used to ensure the HTTP session is ready
+            for API requests. It should not be called directly.
+        """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 headers={'Authorization': f'Bearer {self.config.gitlab_token}'}
             )
     
     async def close(self) -> None:
-        """Close the aiohttp session."""
+        """
+        Close the aiohttp session and clean up resources.
+        
+        This method ensures proper cleanup of the HTTP session to prevent
+        resource leaks. It should be called when the service is no longer needed.
+        
+        Usage:
+            >>> async with GitLabService() as service:
+            ...     # Use the service
+            ...     pass
+            # Session is automatically closed
+            
+        Or manually:
+            >>> service = GitLabService()
+            >>> # Use the service
+            >>> await service.close()
+        """
         if self._session and not self._session.closed:
             await self._session.close()
     
     async def get_users(self, page: int) -> List[Dict]:
-        """Get users list with pagination asynchronously."""
+        """
+        Get users list with pagination asynchronously.
+        
+        This method retrieves a paginated list of GitLab users, filtering for active users only.
+        
+        Args:
+            page: The page number to retrieve (starting from 1)
+            
+        Returns:
+            List of user dictionaries, or empty list if an error occurs
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     users = await service.get_users(1)
+            ...     print(f"Found {len(users)} users on page 1")
+            
+        Note:
+            - Each page returns a maximum of `config.page_size` users
+            - Only active users are returned (inactive users are filtered out)
+            - Returns empty list if no users found or an error occurs
+        """
         await self._ensure_session()
         
         params = {
@@ -79,7 +174,26 @@ class GitLabService:
             return []
     
     async def get_user(self, user_id: int) -> Dict:
-        """Get user details by ID asynchronously."""
+        """
+        Get user details by ID asynchronously.
+        
+        This method retrieves detailed information about a specific GitLab user.
+        
+        Args:
+            user_id: The unique identifier of the user
+            
+        Returns:
+            Dictionary containing user details, or empty dict if an error occurs
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     user = await service.get_user(123)
+            ...     print(f"User name: {user.get('name')}")
+            
+        Note:
+            - Returns empty dictionary if user not found or an error occurs
+            - Includes user metadata like name, username, email, avatar URL, etc.
+        """
         await self._ensure_session()
         
         url = f"{self.config.gitlab_url}/api/v4/users/{user_id}"
@@ -96,7 +210,30 @@ class GitLabService:
             return {}
         
     async def get_all_historical_user_assignments(self, user_id: int, username:str, progress_callback=None) -> List[Dict]:
-        """Get all tasks where the user is an assignee or participant."""
+        """
+        Get all tasks where the user is an assignee or participant.
+        
+        This method retrieves all tasks associated with a user, either as assignee
+        or as a participant who has been involved in the task.
+        
+        Args:
+            user_id: The unique identifier of the user
+            username: The username of the user
+            progress_callback: Optional callback function to report progress
+            
+        Returns:
+            List of task dictionaries where the user is involved
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     tasks = await service.get_all_historical_user_assignments(123, "john_doe")
+            ...     print(f"Found {len(tasks)} tasks for user")
+            
+        Note:
+            - This is a computationally intensive operation for large projects
+            - Progress is reported through the callback function if provided
+            - Filters tasks where the user is either an assignee or participant
+        """
         try:
             await self._ensure_session()
             
@@ -129,21 +266,21 @@ class GitLabService:
                     
                     # Check if user_id is in participants
                     user_is_participant = any(
-                        participant.get('id') == user_id 
+                        participant.get('id') == user_id
                         for participant in participants
                     )
-                                     
+                                    
                     if user_is_participant:
                         user_tasks.append(task)
                     
-                 
+                  
                     if progress_callback and tasks and index%self.config.progress_step==0:  # Prevent division by zero
                         progress = min(99, int(((index + 1) / len(tasks)) * 100))
                         await progress_callback(
                             f"🔍Filtering tasks...\n"
                             f"✅{len(user_tasks)} matches\n"
                             f"▶️Progress: {index + 1}/{len(tasks)}",
-                            progress  
+                            progress
                         )
                             
                 except Exception as e:
@@ -184,13 +321,13 @@ class GitLabService:
                         f"❓Checking filtered tasks...\n"
                         f"✅{len(assigned_tasks)} matches\n"
                         f"▶️Progress: {index + 1}/{len(user_tasks)}",
-                        progress  
+                        progress
                     )
 
                     
             if progress_callback:
                 await progress_callback(
-                    f"🎉 Loading completed!\n📊 Total user tasks: {len(assigned_tasks)}", 
+                    f"🎉 Loading completed!\n📊 Total user tasks: {len(assigned_tasks)}",
                     100
                 )
 
@@ -206,7 +343,29 @@ class GitLabService:
             return []
 
     async def get_all_tasks(self, progress_callback=None) -> List[Dict]:
-        """Get all tasks/issues from GitLab with progress updates."""
+        """
+        Get all tasks/issues from GitLab with progress updates.
+        
+        This method retrieves all issues from GitLab with pagination, providing
+        progress updates through the callback function if provided.
+        
+        Args:
+            progress_callback: Optional callback function to report progress
+            
+        Returns:
+            List of all task dictionaries from GitLab
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     tasks = await service.get_all_tasks()
+            ...     print(f"Retrieved {len(tasks)} tasks from GitLab")
+            
+        Note:
+            - This is a potentially time-consuming operation for large projects
+            - Pagination is handled automatically
+            - Progress is reported through the callback function if provided
+            - Retrieves all states (open, closed, etc.) of issues
+        """
         await self._ensure_session()
         
         url = f"{self.config.gitlab_url}/api/v4/issues"
@@ -269,7 +428,7 @@ class GitLabService:
             
             if progress_callback:
                 await progress_callback(
-                    f"🎉 Loading completed!\n📊 Total tasks: {len(all_tasks)}", 
+                    f"🎉 Loading completed!\n📊 Total tasks: {len(all_tasks)}",
                     100
                 )
             
@@ -289,11 +448,28 @@ class GitLabService:
             return []
         
     async def get_task_participants(self, project_id: int, task_iid: int) -> list:
-        """Get ALL participants for a specific issue/task from GitLab with pagination."""
+        """
+        Get ALL participants for a specific issue/task from GitLab with pagination.
+        
+        This method retrieves all participants who have been involved in a specific
+        issue or task, using pagination to ensure all participants are retrieved.
+        
+        Args:
+            project_id: The ID of the GitLab project
+            task_iid: The internal ID of the task within the project
+            
+        Returns:
+            List of participant dictionaries
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     participants = await service.get_task_participants(123, 456)
+            ...     print(f"Task has {len(participants)} participants")
+        """
         await self._ensure_session()
         all_participants = []
         page = 1
-        per_page = 100  
+        per_page = 100
 
         while True:
             url = (
@@ -311,7 +487,7 @@ class GitLabService:
                     response.raise_for_status()
                     
                     participants = await response.json()
-                    if not participants:  
+                    if not participants:
                         break
                         
                     all_participants.extend(participants)
@@ -328,7 +504,25 @@ class GitLabService:
         return all_participants
         
     async def get_task_notes(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
-        """Get ALL notes for a specific issue/task from GitLab."""
+        """
+        Get ALL notes for a specific issue/task from GitLab.
+        
+        This method retrieves all notes (comments, system messages, etc.) for a specific
+        issue or task, using pagination to ensure all notes are retrieved.
+        
+        Args:
+            project_id: The ID of the GitLab project
+            task_iid: The internal ID of the task within the project
+            params: Optional parameters to filter the notes
+            
+        Returns:
+            List of note dictionaries
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     notes = await service.get_task_notes(123, 456)
+            ...     print(f"Retrieved {len(notes)} notes for task")
+        """
         await self._ensure_session()
         
         all_notes = []
@@ -350,7 +544,7 @@ class GitLabService:
                     response.raise_for_status()
                     
                     notes = await response.json()
-                    if not notes: 
+                    if not notes:
                         break
                     
                     all_notes.extend(notes)
@@ -371,7 +565,25 @@ class GitLabService:
         return all_notes
 
     async def check_task_assignee(self,username:str, project_id: int, task_iid: int) -> bool:
-        """Check if the current user is the assignee of a task."""
+        """
+        Check if the current user is the assignee of a task.
+        
+        This method examines the task notes to determine if the specified user
+        has been assigned to the task through system messages or assignment changes.
+        
+        Args:
+            username: The username to check
+            project_id: The ID of the GitLab project
+            task_iid: The internal ID of the task within the project
+            
+        Returns:
+            Boolean indicating if the user is assigned to the task
+            
+        Example:
+            >>> is_assignee = await check_task_assignee("john_doe", 123, 456)
+            >>> if is_assignee:
+            ...     print("User is assigned to this task")
+        """
         await self._ensure_session()
         
         notes = await self.get_task_notes(project_id, task_iid, params={'activity_filter': 'only_activity'})
@@ -399,6 +611,25 @@ class GitLabService:
         return False
     
     async def get_user_metrics(self, user_id: int, username:str, progress_callback=None) -> List[Dict]:
+        """
+        Get metrics for all tasks assigned to a user.
+        
+        This method retrieves all tasks assigned to a user and calculates metrics
+        for each task, including time spent in different stages.
+        
+        Args:
+            user_id: The unique identifier of the user
+            username: The username of the user
+            progress_callback: Optional callback function to report progress
+            
+        Returns:
+            List of task dictionaries with calculated metrics
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     metrics = await service.get_user_metrics(123, "john_doe")
+            ...     print(f"Calculated metrics for {len(metrics)} tasks")
+        """
         tasks = await self.get_all_historical_user_assignments(user_id, username, progress_callback)
         tasks_with_metrics = []
 
@@ -408,12 +639,30 @@ class GitLabService:
             if progress_callback and index % self.config.progress_step == 0:
                await progress_callback("Fetching tasks metrics...",((index+1)/(len(tasks)))*100)
 
-        if progress_callback: 
+        if progress_callback:
             await progress_callback("Fetching tasks metrics...",100)
         return tasks_with_metrics
     
     async def get_resource_label_events(self, project_id: int, task_iid: int, params: Optional[dict] = None) -> list:
-        """Get ALL resource label events for a specific issue/task from GitLab."""
+        """
+        Get ALL resource label events for a specific issue/task from GitLab.
+        
+        This method retrieves all label change events (additions/removals) for a specific
+        issue or task, using pagination to ensure all events are retrieved.
+        
+        Args:
+            project_id: The ID of the GitLab project
+            task_iid: The internal ID of the task within the project
+            params: Optional parameters to filter the events
+            
+        Returns:
+            List of label event dictionaries
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     events = await service.get_resource_label_events(123, 456)
+            ...     print(f"Found {len(events)} label events for task")
+        """
         await self._ensure_session()
         
         all_events = []
@@ -435,7 +684,7 @@ class GitLabService:
                     response.raise_for_status()
                     
                     events = await response.json()
-                    if not events: 
+                    if not events:
                         break
                     
                     all_events.extend(events)
@@ -459,12 +708,19 @@ class GitLabService:
         """
         Get metrics for a specific task by collecting relevant history and calculating metrics.
         
+        This method retrieves the history and label events for a task and calculates
+        metrics for the specified user.
+        
         Args:
             task: The task dictionary containing task details
             username: The username for which to calculate metrics
             
         Returns:
             Dict: A dictionary containing the task metrics
+            
+        Example:
+            >>> task = {"project_id": 123, "iid": 456, "title": "Sample task"}
+            >>> metrics = await get_task_metrics(task, "john")
         """
         task_metrics = {}
         task_metrics['task_id'] = task.get('id')
@@ -488,6 +744,9 @@ class GitLabService:
         """
         Calculate task metrics for a specific user based on activity history and label changes.
         
+        This method analyzes the history of a task to calculate time spent in different
+        development stages (work, review, QA) for a specific user.
+        
         Args:
             history: List of system events (comments, assignments, etc.)
             labels_history: List of label change events
@@ -496,6 +755,12 @@ class GitLabService:
         
         Returns:
             Updated task_metrics dictionary with calculated metrics
+            
+        Example:
+            >>> history = [{"created_at": "2023-01-01T00:00:00Z", "body": "assigned to @john"}]
+            >>> labels = [{"created_at": "2023-01-01T00:00:00Z", "action": "add", "label": {"name": "doing"}}]
+            >>> metrics = {}
+            >>> updated_metrics = await calculate_metrics(history, labels, "john", metrics)
         """
         # Merge and sort both event lists by creation time
         sorted_history = sorted(history, key=lambda x: x['created_at'])
@@ -656,6 +921,20 @@ class GitLabService:
         return task_metrics
     
     async def get_all_users(self)-> List[Dict]:
+        """
+        Get all users from GitLab by iterating through all pages.
+        
+        This method retrieves all users by paginating through all available pages
+        until no more users are returned.
+        
+        Returns:
+            List of all user dictionaries from GitLab
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     all_users = await service.get_all_users()
+            ...     print(f"Retrieved {len(all_users)} users from GitLab")
+        """
         try:
             users = []
             page=0
@@ -672,7 +951,32 @@ class GitLabService:
             raise e
         
     async def create_new_task(self, project_id: int, task_name: str, task_description: str, assignee_id: int, labels: List[str]) -> Dict:
-        """Create a new task (issue) in GitLab project asynchronously."""
+        """
+        Create a new task (issue) in GitLab project asynchronously.
+        
+        This method creates a new issue in the specified GitLab project with the provided details.
+        
+        Args:
+            project_id: The ID of the GitLab project where the task will be created
+            task_name: The title of the task
+            task_description: The description of the task
+            assignee_id: The ID of the user to assign the task to (can be None)
+            labels: A list of label names to apply to the task
+            
+        Returns:
+            A dictionary containing the created task details
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     task = await service.create_new_task(
+            ...         project_id=123,
+            ...         task_name="New feature",
+            ...         task_description="Implement new feature",
+            ...         assignee_id=456,
+            ...         labels=["feature", "high-priority"]
+            ...     )
+            ...     print(f"Created task: {task['web_url']}")
+        """
         await self._ensure_session()
         
         url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues"
@@ -705,7 +1009,23 @@ class GitLabService:
             raise e
         
     async def get_user_id_by_name(self, user_name: str) -> Optional[int]:
-        """Find GitLab user ID by name"""
+        """
+        Find GitLab user ID by name.
+        
+        This method searches for a GitLab user by their full name and returns their ID.
+        
+        Args:
+            user_name: The full name of the user to search for
+            
+        Returns:
+            The user ID if found, None otherwise
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     user_id = await service.get_user_id_by_name("John Doe")
+            ...     if user_id:
+            ...         print(f"Found user with ID: {user_id}")
+        """
         await self._ensure_session()
         
         # URL for user search
@@ -750,6 +1070,11 @@ class GitLabService:
         Notes:
             - Handles GitLab API pagination (returns all pages)
             - Labels are returned in order from GitLab API (typically alphabetical)
+            
+        Example:
+            >>> async with GitLabService() as service:
+            ...     labels = await service.get_labels_from_project_id(123)
+            ...     print(f"Found {len(labels)} labels in project")
         """
         await self._ensure_session()
         

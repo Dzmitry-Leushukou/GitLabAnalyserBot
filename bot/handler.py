@@ -20,6 +20,22 @@ logger.setLevel(logging.INFO)
 logger.addHandler(logging.StreamHandler())
 
 class Handler:
+    """
+    Main handler class for processing Telegram bot messages and commands.
+    
+    This class handles all user interactions with the bot, including:
+    - Processing commands like /start
+    - Handling text messages for task creation
+    - Processing voice messages through transcription
+    - Managing user navigation through different menus
+    - Calculating and displaying user metrics
+    
+    The class implements a singleton pattern to ensure only one instance exists.
+    
+    Example:
+        >>> handler = Handler(gitlab_service)
+        >>> # Use the handler to process updates
+    """
     _instance = None
     
     def __new__(cls, gitlab_service=None):
@@ -31,6 +47,12 @@ class Handler:
             
         Returns:
             Handler: The single instance of the Handler class
+            
+        Example:
+            >>> handler = Handler()
+            >>> # This will always return the same instance
+            >>> handler2 = Handler()
+            >>> assert handler is handler2
         """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -43,6 +65,10 @@ class Handler:
         
         Args:
             gitlab_service: Optional GitLab service instance to inject
+            
+        Note:
+            This method is part of the singleton pattern implementation and
+            should not be called directly. Use the class constructor instead.
         """
         if not self._initialized:
             self.config = Config()
@@ -57,9 +83,16 @@ class Handler:
         """
         Handle errors that occur during bot operation.
         
+        This method logs errors that occur during bot operation, providing
+        debugging information for troubleshooting.
+        
         Args:
             update: The update object that caused the error
             context: The context object containing error information
+            
+        Example:
+            This method is automatically called by the Telegram bot framework
+            when an unhandled exception occurs during message processing.
         """
         logger.error(f"Update {update} caused error {context.error}", exc_info=True)
 
@@ -67,9 +100,16 @@ class Handler:
         """
         Handle the /start command from users.
         
+        This method responds to the /start command by sending a welcome message
+        and presenting the start menu to the user.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            When a user sends "/start" command to the bot, this method is triggered
+            and sends a welcome message with the start menu.
         """
         logger.info("Start command")
         await update.message.reply_text(
@@ -81,9 +121,18 @@ class Handler:
         """
         Handle incoming text messages from users and route them to appropriate functions.
         
+        This method processes different types of text messages and routes them to
+        the appropriate handler functions based on the message content.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            - If a user sends "Start", it shows the start menu
+            - If a user sends "Workers", it shows the list of GitLab users
+            - If a user sends a username, it shows user details
+            - If a user sends other text, it tries to create a task
         """
         # First check if there is a voice message
         if update.message.voice:
@@ -131,9 +180,17 @@ class Handler:
         """
         Handle incoming voice messages from users.
         
+        This method processes voice messages by transcribing them using the
+        Whisper service and then treating the transcribed text as a command
+        or task creation request.
+        
         Args:
             update: The update object containing the voice message
             context: The context object for the handler
+            
+        Example:
+            When a user sends a voice message saying "Create a login page task for John",
+            this method transcribes the message and processes it as a task creation request.
         """
         logger.info("Received voice message")
         
@@ -224,9 +281,16 @@ class Handler:
         """
         Handle the workers message request, displaying paginated list of GitLab users.
         
+        This method retrieves and displays a paginated list of GitLab users, creating
+        a mapping of user names to IDs for later reference.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            When a user selects "Workers" from the main menu, this method
+            retrieves the first page of users from GitLab and displays them.
         """
         logger.info("Workers message")
         
@@ -255,9 +319,15 @@ class Handler:
         """
         Handle returning to the main menu.
         
+        This method returns the user to the main menu with available options.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            When a user selects "Main menu" from any submenu, this method
+            displays the main menu options to the user.
         """
         logger.info("Back to Main menu message")
         await update.message.reply_text(
@@ -269,9 +339,15 @@ class Handler:
         """
         Handle the worker message request, displaying list of GitLab users.
         
+        This method retrieves and displays the first page of GitLab users.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            When a user selects "Workers" from the main menu, this method
+            retrieves and displays the first page of users from GitLab.
         """
         logger.info("Worker message")
         reply_markup = await get_workers_menu(self.gitlab_service)
@@ -284,10 +360,17 @@ class Handler:
         """
         Handle user selection, displaying detailed information about the selected user.
         
+        This method retrieves and displays detailed information about a selected GitLab user,
+        including their name, username, email, status, avatar URL, and creation date.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
             user_id: The ID of the selected user
+            
+        Example:
+            When a user taps on a username from the workers list, this method
+            retrieves the user's information from GitLab and displays it.
         """
         logger.info(f"Selected user with ID: {user_id}")
         user_data = await self.gitlab_service.get_user(user_id)
@@ -326,6 +409,10 @@ class Handler:
             
         Returns:
             Human-readable string (e.g., "2d 5h 30m 15s")
+            
+        Example:
+            >>> print(Handler.format_duration(7845))
+            "2h 10m 45s"
         """
         if not seconds or seconds <= 0:
             return "0s"
@@ -362,6 +449,10 @@ class Handler:
             
         Returns:
             Short human-readable string (e.g., "2.5h", "45m", "1d 3h")
+            
+        Example:
+            >>> print(Handler.format_duration_short(7845))
+            "2.2h"
         """
         if not seconds or seconds <= 0:
             return "0s"
@@ -400,9 +491,17 @@ class Handler:
         """
         Handle user metrics request, calculating and displaying detailed metrics for the selected user.
         
+        This method retrieves all tasks assigned to a user and calculates metrics
+        such as time spent in different development stages (work, review, QA).
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            When a user selects "Metrics" from the user detail menu, this method
+            retrieves all tasks for the selected user and generates a comprehensive
+            report with time metrics.
         """
         current_user = context.user_data.get('current_user', 'Unknown')
         current_user_id = context.user_data.get('current_user_id', None)
@@ -607,9 +706,16 @@ class Handler:
         """
         Handle returning to the workers menu with pagination.
         
+        This method returns the user to the workers menu, maintaining the current
+        page number in the pagination.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
+            
+        Example:
+            When a user selects "Back to workers" from the user detail menu,
+            this method displays the workers list at the same page they were on previously.
         """
         logger.info("Back to workers menu")
         page = context.user_data.get('page', 1)
@@ -623,10 +729,18 @@ class Handler:
         """
         Handle creating a task.
         
+        This method processes a user's text message and creates a GitLab task
+        based on the content using AI-powered analysis.
+        
         Args:
             update: The update object containing the message
             context: The context object for the handler
             text: The message text from user
+            
+        Example:
+            When a user sends a message like "Create a login page for John Doe",
+            this method uses AI to parse the request and create a corresponding
+            GitLab task with appropriate assignment and labels.
         """
         logger.info(f"Creating task from message: {text}")
         
