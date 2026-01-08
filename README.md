@@ -20,7 +20,7 @@ A Telegram bot that integrates with GitLab API to provide user information and a
 
 ## Overview
 
-This project is a Telegram bot that connects to a GitLab instance and allows users to browse GitLab users through a simple chat interface. The bot provides pagination functionality to navigate through users and displays user information in a clean, organized manner. Additionally, it can analyze task assignments, calculate time metrics for different development stages, and generate detailed reports about user activities in GitLab. The bot also features AI-powered task assignment based on natural language processing.
+This project is a Telegram bot that connects to a GitLab instance and allows users to browse GitLab users through a simple chat interface. The bot provides pagination functionality to navigate through users and displays user information in a clean, organized manner. Additionally, it can analyze task assignments, calculate time metrics for different development stages, and generate detailed reports about user activities in GitLab. The bot also features AI-powered task assignment based on natural language processing and voice message support with speech-to-text functionality.
 
 ## Features
 
@@ -36,6 +36,7 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 - **Configuration**: Environment-based configuration for easy setup
 - **Progress Tracking**: Real-time progress updates during data fetching operations
 - **AI Task Assignment**: Natural language processing for intelligent task assignment
+- **Voice Recognition**: Speech-to-text functionality for voice message processing
 - **LLM Integration**: Connects to external LLM services for advanced task analysis
 
 ## Prerequisites
@@ -44,6 +45,7 @@ This project is a Telegram bot that connects to a GitLab instance and allows use
 - GitLab instance with API access
 - Telegram Bot Token
 - LLM service endpoint (optional, for AI features)
+- OpenAI API key (optional, for voice recognition features)
 
 ## Installation
 
@@ -82,6 +84,10 @@ GITLAB_TOKEN=your-gitlab-api-token
 # LLM Service Configuration (optional)
 LLM_URL=your-llm-service-url
 LLM_API_KEY=your-llm-api-key
+
+# Whisper Service Configuration (optional)
+WHISPER_API_KEY=your-openai-api-key
+DEFAULT_PROJECT_ID=your-default-project-id
 ```
 
 ### Configuration Details
@@ -93,6 +99,8 @@ LLM_API_KEY=your-llm-api-key
 - `GITLAB_TOKEN`: GitLab personal access token with appropriate permissions
 - `LLM_URL`: URL of your LLM service endpoint (optional, for AI features)
 - `LLM_API_KEY`: API key for your LLM service (optional, for AI features)
+- `WHISPER_API_KEY`: OpenAI API key for voice recognition (optional, for voice features)
+- `DEFAULT_PROJECT_ID`: Default GitLab project ID for task creation
 
 ## Usage
 
@@ -116,6 +124,7 @@ After selecting a user, you can access additional functionality:
 - **Time Metrics**: Calculate and view time spent in different development stages (work, review, QA)
 - **Export Data**: Export user tasks with detailed information and metrics to JSON files
 - **AI Task Creation**: Send natural language messages to create GitLab tasks automatically assigned to appropriate users
+- **Voice Commands**: Support for voice messages that are converted to text and processed as commands
 
 
 
@@ -135,6 +144,7 @@ The bot allows users to interact with GitLab user data:
 - **Time Metrics**: Calculate and display time spent in different development stages (work, review, QA)
 - **Export**: Export user tasks with detailed information and metrics to a JSON file
 - **AI Task Creation**: Send natural language messages to create GitLab tasks automatically assigned to appropriate users
+- **Voice Recognition**: Send voice messages that will be transcribed and processed as commands
 
 
 ### Navigation Controls
@@ -175,6 +185,8 @@ GitLabAnalytics/
 - `requests` - HTTP requests library
 - `python-gitlab` - GitLab API client library
 - `aiohttp` - Asynchronous HTTP client/server framework
+- `openai` - OpenAI API client library (for voice recognition)
+- `pydub` - Audio manipulation library (for voice processing)
 
 
 ## Development
@@ -211,5 +223,6 @@ When contributing, please follow these guidelines:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Submit a pull request
+4. Test voice recognition features if applicable
+5. Submit a pull request
 

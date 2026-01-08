@@ -16,7 +16,8 @@ class Config:
             progress_step_env = os.getenv("PROGRESS_STEP")
             cls._instance.__llm_url = os.getenv("LLM_URL")
             cls._instance.__llm_api_key = os.getenv("LLM_API_KEY")
-
+            cls._instance.__whisper_api_key = os.getenv("WHISPER_API_KEY")
+            cls._instance.__default_project_id = os.getenv("DEFAULT_PROJECT_ID")
             if not page_size_env or not progress_step_env:
                 raise ValueError("PAGE_SIZE or PROGRESS_STEP is not set")
             
@@ -56,3 +57,11 @@ class Config:
     @property
     def llm_api_key(self):
         return self.__llm_api_key
+    
+    @property
+    def whisper_api_key(self):
+        return self.__whisper_api_key
+    
+    @property
+    def default_project_id(self):
+        return self.__default_project_id

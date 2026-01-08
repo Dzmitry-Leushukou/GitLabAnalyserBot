@@ -9,8 +9,10 @@ import json
 from datetime import datetime
 from telegram import InputFile
 from services.LLMService import LLMService
+from services.WhisperService import get_whisper_service
 import aiohttp
-
+import tempfile
+import os
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,6 +50,7 @@ class Handler:
             self.current_users = {}
             self.gitlab_service = gitlab_service
             self.llm_service = LLMService()
+            self.whisper_service = get_whisper_service()  # Initialize WhisperService
     
     @staticmethod
     async def error_handler(update, context):
@@ -82,6 +85,12 @@ class Handler:
             update: The update object containing the message
             context: The context object for the handler
         """
+        # First check if there is a voice message
+        if update.message.voice:
+            await self.handle_voice(update, context)
+            return
+        
+        # Если нет голосового, обрабатываем текст
         text = update.message.text
         
         match text:
@@ -116,7 +125,100 @@ class Handler:
             case "Back to workers":
                 await self.back_to_workers_menu(update, context)
             case _:
-                await self.create_task(update,context,text)
+                await self.create_task(update, context, text)
+
+    async def handle_voice(self, update, context):
+        """
+        Handle incoming voice messages from users.
+        
+        Args:
+            update: The update object containing the voice message
+            context: The context object for the handler
+        """
+        logger.info("Received voice message")
+        
+        # Prepare status message
+        status_msg = await update.message.reply_text(
+            text="🎙️ Processing voice message..."
+        )
+        
+        try:
+            # Получаем голосовое сообщение
+            voice = update.message.voice
+            file_id = voice.file_id
+            
+            # Получаем файл из Telegram
+            voice_file = await context.bot.get_file(file_id)
+            
+            # Download voice message to memory
+            voice_bytes = io.BytesIO()
+            await voice_file.download_to_memory(voice_bytes)
+            
+            # Check WhisperService availability
+            if not await self.whisper_service.is_available():
+                await status_msg.edit_text(
+                    text="❌ Speech recognition service is not available. "
+                         "Please check OpenAI API key configuration."
+                )
+                return
+            
+            # Transcribe voice message
+            await status_msg.edit_text(
+                text="🎤 Transcribing voice message..."
+            )
+            
+            transcription_result = await self.whisper_service.transcribe_telegram_voice(
+                voice_bytes.getvalue(),
+                language="ru"
+            )
+            
+            if not transcription_result.get('success', False):
+                await status_msg.edit_text(
+                    text="❌ Could not transcribe the voice message. Please try again."
+                )
+                return
+            
+            transcribed_text = transcription_result.get('text', '').strip()
+            
+            if not transcribed_text:
+                await status_msg.edit_text(
+                    text="❌ No speech detected in the voice message."
+                )
+                return
+            
+            # Show user what we recognized
+            await status_msg.edit_text(
+                text=f"✅ **Voice message transcribed:**\n\n{transcribed_text}\n\n"
+                     f"Processing as command..."
+            )
+            
+            # Now process the recognized text
+            # We can simply call create_task directly or handle_message
+            # Let's call create_task to create a task
+            await self.create_task(update, context, transcribed_text)
+            
+        except FileNotFoundError as e:
+            logger.error(f"File not found error: {e}")
+            await status_msg.edit_text(
+                text="❌ Error downloading voice message. Please try again."
+            )
+        except ValueError as e:
+            logger.error(f"Validation error: {e}")
+            await status_msg.edit_text(
+                text=f"❌ {str(e)}"
+            )
+        except Exception as e:
+            logger.error(f"Error processing voice message: {e}", exc_info=True)
+            
+            error_message = "❌ An error occurred while processing the voice message."
+            
+            # Более детальные ошибки
+            if "authentication" in str(e).lower():
+                error_message = "❌ OpenAI API authentication failed. Please check API key."
+            elif "quota" in str(e).lower() or "limit" in str(e).lower():
+                error_message = "❌ OpenAI API quota exceeded. Please check your account."
+            
+            await status_msg.edit_text(text=error_message)
     
     async def workers_message(self, update, context):
         """
@@ -581,7 +683,7 @@ class Handler:
                 project_id = int(project_id_str)
             except ValueError:
                 logger.warning(f"Invalid project_id '{project_id_str}', using default 18")
-                project_id = 18
+                project_id = self.config.default_project_id
             
             # Step 4: Create task in GitLab
             await status_msg.edit_text(

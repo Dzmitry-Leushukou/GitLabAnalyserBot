@@ -58,6 +58,7 @@ def register_message_handlers(app):
         app: The Telegram bot application instance
     """
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handler.handle_message))
+    app.add_handler(MessageHandler(filters.VOICE, handler.handle_voice))
 
 
 if __name__ == '__main__':

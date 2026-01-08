@@ -64,7 +64,7 @@ class LLMService:
         
         # Convert project_id to string
         if data["project_id"] is None:
-            data["project_id"] = "18"
+            data["project_id"] = self.config.default_project_id
         else:
             data["project_id"] = str(data["project_id"])
         
