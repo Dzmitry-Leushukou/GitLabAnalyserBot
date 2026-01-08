@@ -80,7 +80,7 @@ class LLMService:
         
         return data
     
-    async def send_chat_request(self, message: str, chat_id: Optional[str] = None) -> Dict:
+    async def send_chat_request(self, api_key, message: str, chat_id: Optional[str] = None) -> Dict:
         """Send request to server endpoint /chat.
         
         Args:
@@ -97,7 +97,7 @@ class LLMService:
         
         # Form payload according to ChatRequest
         payload = {
-            "api_key": self.config.llm_api_key,
+            "api_key": api_key,
             "message": message
         }
         
@@ -152,7 +152,7 @@ class LLMService:
         
         try:
             # Send request to server endpoint
-            server_response = await self.send_chat_request(message_content)
+            server_response = await self.send_chat_request(self.config.create_task_llm_api_key,message_content)
             
             # Extract AI response from server response
             ai_answer = server_response.get('answer', '')
@@ -201,14 +201,86 @@ class LLMService:
             logger.error(f"HTTP error when sending message: {e}")
             raise
     
-    async def send_message(self, message: str, chat_id: Optional[str] = None) -> Dict:
-        """Send message to LLM via server endpoint.
+    async def set_labels(self, labels: List[Dict[str, str]], user_message:str)-> Dict[str, str]:
+        """Set labels for current task.
         
         Args:
-            message: Message to send
-            chat_id: Chat identifier (optional)
+            labels: List of label dictionaries with name and description
         
         Returns:
-            Server response
+            Dictionary with fields: project_id, title, description, assignee_name
+        
+        Raises:
+            aiohttp.ClientError: HTTP request error
+            json.JSONDecodeError: Invalid JSON in response
+            ValueError: Invalid JSON structure or missing required fields
         """
-        return await self.send_chat_request(message, chat_id)
+        # Формируем строку с метками для LLM
+        labels_info_str = ""
+        for label in labels:
+            name = label.get('name', '')
+            description = label.get('description', '')
+            if name:
+                labels_info_str += f"- {name}"
+                if description:
+                    labels_info_str += f" ({description})"
+                labels_info_str += "\n"
+        
+        message_content = f"Available labels with descriptions:\n{labels_info_str}\n\nUser message for analysis: {user_message}\n\nPlease select appropriate labels from the list above."
+
+        logger.info("Sending request for labels analysis")
+        try:
+            # Send request to server endpoint
+            server_response = await self.send_chat_request(self.config.get_labels_llm_api_key,message_content)
+            
+            # Extract AI response from server response
+            ai_answer = server_response.get('answer', '')
+            
+            # Check if 'answer' field exists in response
+            if 'answer' not in server_response:
+                logger.error(f"Field 'answer' is missing in server response: {server_response}")
+                # Check if there are other possible response fields
+                if 'status' in server_response and server_response['status'] == 'Gateway Service is running':
+                    raise ValueError("Server returned status but does not contain AI response. Possible LLM service configuration issue.")
+                else:
+                    raise ValueError(f"Unexpected server response format: {server_response}")
+            
+            if not ai_answer:
+                logger.error(f"Empty AI response in field 'answer', full response: {server_response}")
+                raise ValueError("Empty AI response")
+            
+            logger.info(f"Received AI response: {ai_answer[:500]}...")
+            
+            try:
+                # Extract and parse JSON from AI response
+                json_text = await self._extract_json_from_response(ai_answer)
+                result = json.loads(json_text)
+                
+                # Validate structure for labels response - only require labels field
+                if "labels" not in result:
+                    raise ValueError(f"Required field is missing in response: labels")
+                
+                # Ensure labels is a list
+                if not isinstance(result["labels"], list):
+                    raise ValueError(f"Field labels must be a list, received: {type(result['labels'])}")
+                
+                logger.info("Successfully processed LLM response")
+                return result
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in AI response: {e}")
+                logger.error(f"Raw AI response: {ai_answer}")
+                raise json.JSONDecodeError(
+                    f"Invalid JSON in AI response: {e}",
+                    e.doc,
+                    e.pos
+                )
+            
+            except ValueError as e:
+                logger.error(f"Invalid JSON structure: {e}")
+                logger.error(f"Parsed JSON: {result if 'result' in locals() else 'No data'}")
+                raise
+        
+        except aiohttp.ClientError as e:
+            logger.error(f"HTTP error when sending message: {e}")
+            raise

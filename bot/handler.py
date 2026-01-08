@@ -678,14 +678,52 @@ class Handler:
                     logger.warning(f"User '{assignee_name}' not found. Available: {list(user_name_to_id.keys())}")
             
             # Convert project_id
-            project_id_str = structured_data.get('project_id', '18')
+            project_id_str = structured_data.get('project_id', str(self.config.default_project_id))
             try:
                 project_id = int(project_id_str)
             except ValueError:
-                logger.warning(f"Invalid project_id '{project_id_str}', using default 18")
+                logger.warning(f"Invalid project_id '{project_id_str}', using default {self.config.default_project_id}")
                 project_id = self.config.default_project_id
             
-            # Step 4: Create task in GitLab
+            # Step 4: Get labels from GitLab
+            await status_msg.edit_text(
+                text="🔍 Getting labels..."
+            )
+            
+            project_labels = await self.gitlab_service.get_labels_from_project_id(project_id)
+            if not project_labels:
+                await status_msg.edit_text(
+                    text="❌ Failed to get labels from GitLab"
+                )
+                return
+            
+            await status_msg.edit_text(
+                text="🤖 Setting labels with AI..."
+            )
+            
+            # Get labels using LLM
+            labels = []
+            try:
+                # Формируем метки как словарь для лучшего понимания LLM
+                labels_info = []
+                for label in project_labels:
+                    if 'name' in label:
+                        label_info = {
+                            'name': label['name'],
+                            'description': label.get('description', '')
+                        }
+                        labels_info.append(label_info)
+                
+                labels_result = await self.llm_service.set_labels(
+                    labels=labels_info,  # Теперь передаем словари вместо строк
+                    user_message=text
+                )
+                labels = labels_result.get('labels', [])
+            except ValueError as e:
+                logger.warning(f"Invalid labels response: {e}")
+                labels = []
+                
+            # Step 6: Create task in GitLab
             await status_msg.edit_text(
                 text="🚀 Creating task in GitLab..."
             )
@@ -694,10 +732,11 @@ class Handler:
                 project_id=project_id,
                 task_name=structured_data.get('title', 'New task'),
                 task_description=structured_data.get('description', ''),
-                assignee_id=assignee_id
+                assignee_id=assignee_id,
+                labels=labels
             )
-            
-            # Step 5: Send success message
+   
+            # Step 7: Send success message
             task_url = task.get('web_url', '#')
             task_iid = task.get('iid', '?')
             task_title = task.get('title', 'New task')
@@ -714,6 +753,9 @@ class Handler:
                 else:
                     success_text += f"*Assignee:* {assignee_name} (not assigned)\n"
             
+            if labels:
+                success_text += f"*Labels:* {', '.join(labels)}\n"
+
             success_text += f"\n[🔗 Open task]({task_url})"
             
             await status_msg.edit_text(

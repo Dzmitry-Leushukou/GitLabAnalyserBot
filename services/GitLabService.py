@@ -4,6 +4,7 @@ import aiohttp
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 import re
+import asyncio
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -670,17 +671,27 @@ class GitLabService:
         except Exception as e:
             raise e
         
-    async def create_new_task(self, project_id: int, task_name: str, task_description: str, assignee_id: int) -> Dict:
+    async def create_new_task(self, project_id: int, task_name: str, task_description: str, assignee_id: int, labels: List[str]) -> Dict:
         """Create a new task (issue) in GitLab project asynchronously."""
         await self._ensure_session()
         
         url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/issues"
         
+
+
         payload = {
             'title': task_name,
             'description': task_description,
-            'assignee_id': assignee_id
         }
+
+
+        # Only add optional fields if they're provided
+        if assignee_id is not None:
+            payload['assignee_id'] = assignee_id
+        
+        if labels:
+            payload['labels'] = ','.join(labels)
+    
         
         try:
             async with self._session.post(url, json=payload) as response:
@@ -720,3 +731,81 @@ class GitLabService:
         except Exception as e:
             logger.error(f"Error searching for user {user_name}: {e}")
             return None
+        
+    async def get_labels_from_project_id(self, project_id: int) -> List[Dict]:
+        """
+        Get all labels from issue boards in a GitLab project with pagination support.
+        
+        This function retrieves all labels that are available across all issue boards
+        in a specified GitLab project. Since labels in GitLab are project-level resources,
+        they can be used on any issue board within the project.
+        
+        Args:
+            project_id (int): The ID of the GitLab project
+            
+        Returns:
+            List[Dict]: A list of label dictionaries containing label information.
+                        Returns empty list if no labels are found or if an error occurs.
+                        
+        Notes:
+            - Handles GitLab API pagination (returns all pages)
+            - Labels are returned in order from GitLab API (typically alphabetical)
+        """
+        await self._ensure_session()
+        
+        # GitLab API endpoint for project labels
+        url = f"{self.config.gitlab_url}/api/v4/projects/{project_id}/labels"
+        
+        all_labels = []
+        page = 1
+        per_page = 100  # GitLab maximum per page
+        
+        try:
+            while True:
+                # Add pagination parameters
+                paginated_url = f"{url}?page={page}&per_page={per_page}"
+                
+                async with self._session.get(paginated_url) as response:
+                    response.raise_for_status()
+                    
+                    # Get current page labels
+                    labels = await response.json()
+                    
+                    if not labels:  # No more labels
+                        break
+                        
+                    all_labels.extend(labels)
+                    
+                    # Check if there are more pages
+                    # GitLab includes pagination headers
+                    if 'X-Next-Page' in response.headers:
+                        next_page = response.headers.get('X-Next-Page')
+                        if next_page and next_page != '':
+                            page = int(next_page)
+                        else:
+                            break
+                    else:
+                        # Fallback: if we got less than per_page items, likely last page
+                        if len(labels) < per_page:
+                            break
+                        page += 1
+                    
+            logger.debug(f"Retrieved {len(all_labels)} labels from project {project_id}")
+            return all_labels
+            
+        except aiohttp.ClientResponseError as e:
+            logger.error(f"GitLab API error fetching labels for project {project_id}: {e}")
+            if e.status == 404:
+                logger.warning(f"Project {project_id} not found or access denied")
+            elif e.status == 403:
+                logger.warning(f"Insufficient permissions to access labels in project {project_id}")
+            return []
+        except aiohttp.ClientError as e:
+            logger.error(f"Network error fetching labels for project {project_id}: {e}")
+            return []
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching labels for project {project_id}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching labels for project {project_id}: {e}")
+            return []

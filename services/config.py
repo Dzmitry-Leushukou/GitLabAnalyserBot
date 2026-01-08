@@ -15,7 +15,8 @@ class Config:
             page_size_env = os.getenv("PAGE_SIZE")
             progress_step_env = os.getenv("PROGRESS_STEP")
             cls._instance.__llm_url = os.getenv("LLM_URL")
-            cls._instance.__llm_api_key = os.getenv("LLM_API_KEY")
+            cls._instance.__create_task_llm_api_key = os.getenv("CREATE_TASK_LLM_API_KEY")
+            cls._instance.__get_labels_llm_api_key = os.getenv("GET_LABELS_LLM_API_KEY")
             cls._instance.__whisper_api_key = os.getenv("WHISPER_API_KEY")
             cls._instance.__default_project_id = os.getenv("DEFAULT_PROJECT_ID")
             if not page_size_env or not progress_step_env:
@@ -55,8 +56,12 @@ class Config:
         return self.__llm_url
     
     @property
-    def llm_api_key(self):
-        return self.__llm_api_key
+    def create_task_llm_api_key(self):
+        return self.__create_task_llm_api_key
+    
+    @property
+    def get_labels_llm_api_key(self):
+        return self.__get_labels_llm_api_key
     
     @property
     def whisper_api_key(self):
